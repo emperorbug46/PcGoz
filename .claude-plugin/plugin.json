@@ -1,0 +1,20 @@
+{
+  "name": "pcgoz",
+  "displayName": "PcGöz",
+  "version": "0.6.1",
+  "description": "Windows masaüstünü görme ve kullanma: UI Automation ağacı, ekran görüntüsü üzerine ref kutuları, fare/klavye. Ağaçtaki ref_7 ile resimdeki 7 numaralı kutu aynı öğedir.",
+  "author": {
+    "name": "emperorbug46"
+  },
+  "license": "MIT",
+  "keywords": [
+    "windows",
+    "masaustu",
+    "ui-automation",
+    "erisilebilirlik",
+    "otomasyon",
+    "ekran-goruntusu"
+  ],
+  "homepage": "https://github.com/emperorbug46/PcGoz",
+  "repository": "https://github.com/emperorbug46/PcGoz"
+}

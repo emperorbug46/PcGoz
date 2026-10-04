@@ -1,0 +1,31 @@
+[project]
+name = "pcgoz"
+dynamic = ["version"]
+description = "Windows masaustu gorme + kontrol MCP sunucusu (UI Automation + SendInput)"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.1",                  # mcp.server.mcpserver API ve ToolError davranisi 2.x
+    "comtypes>=1.4.0",
+    "pillow>=10.0.0",
+    "winrt-runtime>=3.2.1",
+    "winrt-windows-media-ocr>=3.2.1",
+    "winrt-windows-graphics-imaging>=3.2.1",
+    "winrt-windows-storage-streams>=3.2.1",
+    "winrt-windows-globalization>=3.2.1",
+    "winrt-windows-foundation>=3.2.1",
+    "winrt-windows-foundation-collections>=3.2.1",
+]
+
+[project.scripts]
+pcgoz = "pcgoz.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Surum tek yerde: src/pcgoz/__init__.py. plugin.json elle; --doctor uyusmayi yakalar.
+[tool.hatch.version]
+path = "src/pcgoz/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pcgoz"]

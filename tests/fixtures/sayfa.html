@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PcGoz soguk acilis testi</title>
+<style>
+  body { font-family: Segoe UI, sans-serif; margin: 2rem; }
+  .kart { border: 1px solid #ccc; padding: .75rem; margin: .5rem 0; }
+</style>
+
+<h1>Soguk acilis testi sayfasi</h1>
+
+<p>Bu sayfa yerel bir dosya: internet gerekmiyor, icerigi sabit, yani testin
+sonucu ag durumuna ya da bir sitenin degismesine bagli degil. Amac tarayici
+penceresi acilir acilmaz erisilebilirlik agacinin gercekten dolu gelip
+gelmedigini olcmek.</p>
+
+<div class="kart">
+  <h2 id="baslik-form">Form ogeleri</h2>
+  <label>Ad <input id="ad" type="text" value="deneme"></label>
+  <label>Sayi <input id="sayi" type="number" value="42"></label>
+  <label><input id="onay" type="checkbox" checked> Onay kutusu</label>
+  <select id="secim">
+    <option>birinci</option>
+    <option>ikinci</option>
+    <option>ucuncu</option>
+  </select>
+  <button id="dugme-kaydet">Kaydet</button>
+  <button id="dugme-iptal">Iptal</button>
+</div>
+
+<div class="kart">
+  <h2>Baglantilar</h2>
+  <ul>
+    <li><a href="#baslik-form">birinci baglanti</a></li>
+    <li><a href="#baslik-form">ikinci baglanti</a></li>
+    <li><a href="#baslik-form">ucuncu baglanti</a></li>
+    <li><a href="#baslik-form">dorduncu baglanti</a></li>
+    <li><a href="#baslik-form">besinci baglanti</a></li>
+  </ul>
+</div>
+
+<div class="kart">
+  <h2>Tablo</h2>
+  <table>
+    <tr><th>satir</th><th>deger</th></tr>
+    <tr><td>bir</td><td>111</td></tr>
+    <tr><td>iki</td><td>222</td></tr>
+    <tr><td>uc</td><td>333</td></tr>
+  </table>
+</div>
+
+<p id="imza">Turkce karakter denetimi: agirbasli sisman ogrenci, ILIK SUT, gogus.</p>

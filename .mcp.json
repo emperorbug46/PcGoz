@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "pcgoz": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/.venv/Scripts/python.exe",
+      "args": ["-m", "pcgoz"],
+      "env": {
+        "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}/src"
+      }
+    }
+  }
+}

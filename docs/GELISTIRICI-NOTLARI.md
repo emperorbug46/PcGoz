@@ -1,6 +1,6 @@
 # PcGöz — Geliştirici Notları
 
-> **Not:** Bu dosya geliştirme sırasında tutulan teknik notlar, ölçümler ve mimari kararlardır; genel kurulum ve kullanım için [README.md](../README.md) dosyasına bakın.
+> **Not:** Bu dosya geliştirme sırasında tutulan teknik notlar, ölçümler ve mimari kararlardır; genel kurulum ve kullanım için [README.tr.md](../README.tr.md) dosyasına bakın.
 
 ---
 

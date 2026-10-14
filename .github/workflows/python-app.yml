@@ -39,6 +39,12 @@ jobs:
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --extend-exclude=.venv
         # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --extend-exclude=.venv
+    # birim.py etkin klavye duzenini kullanir ve Turkce Q varsayar ("ş" ABD
+    # duzeninde yok); runner'i gelistirici makinesiyle ayni duzene getir.
+    - name: Use Turkish Q keyboard layout
+      run: |
+        Set-WinUserLanguageList -LanguageList tr-TR -Force
+        Set-WinDefaultInputMethodOverride -InputTip "041F:0000041F"
     # Testler pytest degil, duz betik; basarisizlikta 1 ile cikarlar. Sadece girdi
     # gondermeyen ve pencere acmayanlar burada; digerleri gercek masaustu ister.
     - name: Unit tests

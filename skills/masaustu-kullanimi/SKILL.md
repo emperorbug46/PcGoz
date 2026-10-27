@@ -33,6 +33,9 @@ biliyorsan (tıkla, yaz, enter) `pc_batch` ile tek çağrıda çalıştır.
 
 ## Okuma ipuçları
 
+- **Önce metin.** Ne yazdığını ya da ne değiştiğini öğrenmek için `pc_find`/`pc_text` ve
+  eylem sonucundaki "ne değişti" özeti yeter; `pc_batch`'in sonuna alışkanlıkla
+  `pc_screenshot` koyma. Görüntü yalnız yerleşim/renk/simge, boş ağaç ya da canvas için.
 - `pc_read`/`pc_find` sadece **ekranda görünen** öğeleri verir. Aşağıda kalan için kaydır
   (`pc_do scroll`) ve tekrar oku.
 - `pc_find` ad, değer ve AutomationId içinde arar. Bir kutunun içeriğini ("24.09.2026"),
@@ -45,6 +48,11 @@ biliyorsan (tıkla, yaz, enter) `pc_batch` ile tek çağrıda çalıştır.
 `pc_invoke` UIA desenini kullanır: fareyi oynatmaz, odağı çalmaz, pencere örtülüyken de çalışır
 ve araya bir ipucu balonu girse bile yanlış şeye gitmez. `pc_do left_click` geri düşüş yolu.
 İstisna: tarayıcıda (Chromium) web düğmesine `invoke` pencereyi öne alabilir.
+
+Tamamen örtülü Chromium/Electron penceresi (tarayıcı, VS Code, Discord…) sayfayı çizmez, UIA
+metnini de güncellemez; ekran kapalıyken ya da oturum kilitliyken de öyle. Sonuçta
+`[!] … tamamen örtülü` / `Ekran kapali` / `Oturum kilitli` yazıyorsa okuduğun içerik eskidir:
+`invoke` sonrası "değişiklik yok" görünse bile eylemi tekrarlama, önce `pc_focus` ile bak.
 
 ## Boş ağacı "içerik yok" sanma
 
@@ -78,8 +86,9 @@ yeni/değişen öğeler (ref'leriyle). Önce onu oku; çoğu zaman ayrıca `pc_r
 ## Türkçe metin ve uzun yazı
 
 Yazma klavye düzeninden bağımsızdır, `ğüşıöçİĞ` doğru çıkar. 200 karakterin üstü otomatik
-olarak pano üzerinden yapıştırılır. Uygulamanın her tuşa tek tek tepki vermesi gerekiyorsa
-(arama kutusu, otomatik tamamlama) `paste=False` ile zorla.
+olarak pano üzerinden yapıştırılır; `paste=False` bunu kapatmaz. Uygulamanın her tuşa tek tek
+tepki vermesi gerekiyorsa (arama kutusu, otomatik tamamlama) metni 200 karakterlik `type`
+adımlarına böl.
 
 Yapıştırma sonucu hedefin metni okuyup okumadığını söyler. "OKUMADI" uyarısı geldiyse odak
 büyük ihtimalle metin alanında değildi — `pc_text` ile bak, tekrar yapıştırmadan önce odağı düzelt.

@@ -62,7 +62,7 @@ Kurmadan önce bunları kendin doğrulamak istersen kaynak kodu Claude Code'a in
 
 - PcGöz hiçbir ağ bağlantısı kurmaz. Ekran görüntüleri ve OCR Windows API'leriyle yerelde işlenir.
 - Ekran görüntüleri diske kaydedilmez. Ama Claude'a yapıştırdığın herhangi bir resim gibi sohbetin parçası olarak Anthropic'e gider.
-- İşlemler `~/.pcgoz/actions.jsonl` dosyasına yazılır, 5 MB'ta döndürülür. Yerini `PCGOZ_LOG_DIR` ile değiştirebilirsin. Günlükte `pc_do` ile yazılan metin ve gönderilen tuşlar bulunur. Pano içeriği asla yazılmaz, sadece uzunluğu yazılır. Okuma araçları sadece araç adını, süreyi ve sonucu kaydeder.
+- İşlemler `~/.pcgoz/actions.jsonl` dosyasına yazılır, 5 MB'ta döndürülür. Yerini `PCGOZ_LOG_DIR` ile değiştirebilirsin. Günlükte `pc_do` ile gönderilen tuşlar bulunur; yazılan metnin kendisi değil, yalnız uzunluğu ve kısa bir SHA-256 özeti tutulur (aynı metnin iki kez yazıldığını görmeye yeter). Pano içeriği asla yazılmaz, sadece uzunluğu yazılır. Okuma araçları sadece araç adını, süreyi ve sonucu kaydeder.
 
 `python -m pcgoz --stats` günlüğü özetler: araç başına çağrı sayısı, hata oranı ve gecikme.
 
@@ -74,31 +74,41 @@ Kurmadan önce bunları kendin doğrulamak istersen kaynak kodu Claude Code'a in
 | `pc_read` | Pencerenin UI Automation ağacı, `ref_N` numaralarıyla | hayır |
 | `pc_find` | Pencerede ad, değer, rol veya automation ID ile arar. Büyük/küçük harf ve Türkçe karakter farkı gözetmez | hayır |
 | `pc_text` | Pencerenin veya öğenin düz metni | hayır |
-| `pc_screenshot` | Ekran, pencere veya bölge. `annotate=True` ref kutularını çizer | hayır |
+| `pc_screenshot` | Ekran, pencere veya bölge. `annotate=True` ref kutularını çizer. Pencere başka bir pencerenin arkasındaysa hangisi olduğunu söyler | hayır |
 | `pc_ocr` | Erişilebilirlik bilgisi vermeyen uygulamalar için Windows OCR (Qt, canvas, oyunlar) | hayır |
-| `pc_wait_for` | Bir öğe görünene veya kaybolana kadar bekler | hayır |
+| `pc_wait_for` | Bir öğe görünene veya kaybolana kadar bekler (en çok 600 sn; beklerken diğer araçlar çalışır) | hayır |
 | `pc_invoke` | Fareyi oynatmadan, UI Automation ile tetikleme, işaretleme, seçme, açma ve değer yazma | evet |
 | `pc_do` | Tıklama, sağ/çift/orta tık, üzerine gelme, yazma, tuş, kaydırma, sürükleme | evet |
-| `pc_focus` | Pencereyi öne getirir | evet |
+| `pc_focus` | Pencereyi öne getirir; Windows'un odak kilidi ya da örtülü başlık çubuğu engellese de | evet |
 | `pc_window` | Kapatma, küçültme, büyütme, eski boyuta getirme, taşıma | evet |
 | `pc_clipboard` | Pano metnini okur veya yazar | sadece `set` |
 | `pc_batch` | Birkaç çağrıyı tek seferde çalıştırır, ilk hatada durur | adımlardan biri gönderiyorsa |
+
+## 0.6.2'de neler değişti
+
+- **Bayat içerik işaretlenir.** Tamamen örtülü, simge durumunda ya da başka bir sanal masaüstündeki Chromium veya Electron penceresi (tarayıcılar, VS Code, Discord, ...) kendini yeniden çizmez ve erişilebilirlik ağacını güncellemez; ekran görüntüsü ve metin birkaç saniye eski olabilir. PcGöz artık bunu Chromium'un kendi hesabıyla belirler ve sonuca bir `[!]` satırı ekler. Ekran kapalıyken, oturum kilitliyken ya da güvenli masaüstü açıkken de uyarır.
+- **`pc_focus` böyle pencereleri uyandırır.** Zaten önde olup üstü örtülü kalan Chromium penceresi saniyelerce bayat kalıyordu; artık hemen yeniden çizilir.
+- **`pc_wait_for` beklerken diğer araçları kilitlemez** ve 600 saniyeye kadar bekleyebilir.
+- **Daha sağlam öne alma.** Başlık çubuğu örtülüyse `pc_focus` vazgeçmek yerine pencereyi küçültüp geri getirir.
+- Küçük düzeltmeler: geçici UI Automation hatalarında bir kez daha deneme, hedef örtülüyse ekran görüntüsünün bunu söylemesi, toplu işteki beklemelerin girdi kilidi süresine kırpılması ve yazılan metnin artık günlüğe yazılmaması.
 
 ## Sınırlamalar
 
 - **Yönetici pencereleri:** bir uygulama yönetici olarak çalışıyor, Claude Code çalışmıyorsa Windows o uygulamaya girdi gönderilmesini engeller (UIPI). Görev Yöneticisi gibi bir şeyi kullandırmak için Claude Code'u yönetici olarak başlat.
 - **Erişilebilirlik bilgisi vermeyen uygulamalar** (Qt, canvas, oyunlar, uzak masaüstü) ağaçta görünmez. Onlar için `pc_screenshot` ve `pc_ocr` kullan.
 - **Donmuş uygulamalara** önce zaman aşımlı bir yoklama yapılır, böylece donan bir pencere sunucuyu da dondurmaz.
+- **Örtülü Chromium/Electron pencereleri** öne alınana kadar eski içerik verir; bu sonuçlarda bir `[!]` satırı olur. Yalnız Chromium tabanlı pencerelere bakılır, Firefox ve WebView2 uygulamalarına değil.
 
 ## Sorun giderme
 
 - **Klasörü taşıdıktan sonra araçlar görünmüyor:** `--doctor` çalıştır. `~/.claude.json` kaydının hâlâ doğru `python.exe` dosyasını gösterip göstermediğine bakar.
 - **Erişilebilirlik katmanından (`comtypes`) hatalar:** `python -m pcgoz --repair` önbellekteki sarmalayıcıları yeniden üretir, sonra `--doctor` çalıştırır.
 - **Yedek mod:** sunucu bir şeyi içe aktaramazsa yine açılır, aynı araçları sunar ve neyin bozulduğunu anlatır. Bu olmasa Claude'da sadece `CONNECTION_CLOSED` görünürdü.
+- **Sonuçta `[!]` satırı var:** içerik eski olabilir. Pencereyi `pc_focus` ile öne al; ekran kapalıysa fareyi oynatarak (`pc_do action="hover"`) aç.
 
 ## Geliştirme
 
-Testler düz betik, örneğin `uv run python tests/birim.py` ile çalışır. `birim.py` ve `mcp_istemci.py` girdi göndermez ve CI'da Windows üzerinde çalışır. Diğerleri (`smoke.py`, `kapsam.py`, `tus_probu.py`, ...) gerçek fare ve klavyeyi kullanır, bilgisayarı kullanmadığın bir zamanda çalıştır.
+Testler düz betik, örneğin `uv run python tests/birim.py` ile çalışır. `birim.py` ve `mcp_istemci.py` girdi göndermez ve CI'da Windows üzerinde çalışır. Diğerleri (`smoke.py`, `kapsam.py`, `tus_probu.py`, ...) gerçek fare ve klavyeyi kullanır, bilgisayarı kullanmadığın bir zamanda çalıştır. `ortulu_chromium.py` bayat içerik uyarısını denemek için geçici bir Brave penceresi açar, `ekran_kapali.py` ekranı kapatır.
 
 Tasarım notları ve ölçümler: [docs/GELISTIRICI-NOTLARI.md](docs/GELISTIRICI-NOTLARI.md)
 

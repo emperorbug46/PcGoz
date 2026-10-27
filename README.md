@@ -62,7 +62,7 @@ If you want to check this yourself before installing, ask Claude Code to review 
 
 - PcGöz makes no network connections. Screenshots and OCR are processed locally with Windows APIs.
 - Screenshots are never written to disk. They do reach Anthropic as part of your conversation, like any image you paste into Claude.
-- Actions are logged to `~/.pcgoz/actions.jsonl`, rotated at 5 MB. Set `PCGOZ_LOG_DIR` to move it. The log contains text typed with `pc_do` and the keys sent. Clipboard contents are never logged, only their length. Read-only tools log just the tool name, duration and result.
+- Actions are logged to `~/.pcgoz/actions.jsonl`, rotated at 5 MB. Set `PCGOZ_LOG_DIR` to move it. The log contains the keys sent with `pc_do`, but not the text typed: only its length and a short SHA-256 prefix, enough to spot the same text typed twice. Clipboard contents are never logged, only their length. Read-only tools log just the tool name, duration and result.
 
 `python -m pcgoz --stats` summarizes the log: calls, error rate and latency per tool.
 
@@ -74,33 +74,43 @@ If you want to check this yourself before installing, ask Claude Code to review 
 | `pc_read` | UI Automation tree of a window, with `ref_N` numbers | no |
 | `pc_find` | Searches a window by name, value, role or automation ID, ignoring case and accents | no |
 | `pc_text` | Plain text of a window or element | no |
-| `pc_screenshot` | Screen, window or region. `annotate=True` draws the ref boxes | no |
+| `pc_screenshot` | Screen, window or region. `annotate=True` draws the ref boxes. If the window is hidden behind another, it says which one | no |
 | `pc_ocr` | Windows OCR, for apps that expose no accessibility info (Qt, canvas, games) | no |
-| `pc_wait_for` | Waits until an element appears or disappears | no |
+| `pc_wait_for` | Waits until an element appears or disappears (up to 600 s; other tools keep working meanwhile) | no |
 | `pc_invoke` | Invoke, toggle, select, expand or set a value through UI Automation, without moving the mouse | yes |
 | `pc_do` | Click, right/double/middle click, hover, type, key, scroll, drag | yes |
-| `pc_focus` | Brings a window to the front | yes |
+| `pc_focus` | Brings a window to the front, also when Windows' focus lock or a covered title bar is in the way | yes |
 | `pc_window` | Close, minimize, maximize, restore, move | yes |
 | `pc_clipboard` | Reads or sets clipboard text | only `set` |
 | `pc_batch` | Runs several calls in one go and stops at the first error | if any step does |
 
 Tool descriptions and messages are in Turkish (plain ASCII). Claude reads them without trouble and still answers you in your own language.
 
+## What's new in 0.6.2
+
+- **Stale content is flagged.** A Chromium or Electron window (browsers, VS Code, Discord, ...) that is fully covered, minimized or on another virtual desktop stops repainting and stops updating its accessibility tree, so screenshots and text can be several seconds old. PcGöz now works this out the same way Chromium does and adds a `[!]` line to the result. It also warns when the display is off, the session is locked or a secure desktop is showing.
+- **`pc_focus` wakes such windows.** A covered Chromium window that was already in the foreground used to stay stale for seconds; it now repaints right away.
+- **`pc_wait_for` no longer blocks other tools** while it waits, and can wait up to 600 s.
+- **Sturdier focusing.** If the title bar is covered, `pc_focus` minimizes and restores the window instead of giving up.
+- Smaller fixes: one retry on transient UI Automation errors, screenshots say when the target is covered, waits inside a batch are cut to the input-lock time, and typed text is no longer written to the log.
+
 ## Limitations
 
 - **Elevated windows:** if an app runs as administrator and Claude Code doesn't, Windows blocks input to it (UIPI). Run Claude Code as administrator to automate something like Task Manager.
 - **Apps without accessibility info** (Qt, canvas, games, remote desktop) don't show up in the tree. Use `pc_screenshot` and `pc_ocr` for them.
 - **Hung apps** are probed with a timeout first, so a frozen window doesn't freeze the server.
+- **Covered Chromium/Electron windows** return old content until they're brought to the front; such results carry a `[!]` line. Only Chromium-based windows are checked, not Firefox or WebView2 apps.
 
 ## Troubleshooting
 
 - **Tools are missing after moving the folder:** run `--doctor`. It checks whether `~/.claude.json` still points at the right `python.exe`.
 - **Errors from the accessibility layer (`comtypes`):** `python -m pcgoz --repair` regenerates the cached wrappers, then runs `--doctor`.
 - **Fallback mode:** if the server can't import something, it still starts, offers the same tools and explains what broke. Without this, Claude would only show a bare `CONNECTION_CLOSED`.
+- **A result has a `[!]` line:** the content may be old. Bring the window to the front with `pc_focus`; if the display is off, move the mouse (`pc_do action="hover"`) to wake it.
 
 ## Development
 
-The tests are plain scripts, run with e.g. `uv run python tests/birim.py`. `birim.py` and `mcp_istemci.py` send no input and run in CI on Windows. The others (`smoke.py`, `kapsam.py`, `tus_probu.py`, ...) use the real mouse and keyboard, so run them when you're not using the machine.
+The tests are plain scripts, run with e.g. `uv run python tests/birim.py`. `birim.py` and `mcp_istemci.py` send no input and run in CI on Windows. The others (`smoke.py`, `kapsam.py`, `tus_probu.py`, ...) use the real mouse and keyboard, so run them when you're not using the machine. `ortulu_chromium.py` opens a temporary Brave window to check the stale-content warning, and `ekran_kapali.py` turns the display off.
 
 Design notes and measurements, in Turkish: [docs/GELISTIRICI-NOTLARI.md](docs/GELISTIRICI-NOTLARI.md)
 

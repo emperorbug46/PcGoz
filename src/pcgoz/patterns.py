@@ -46,6 +46,15 @@ def _get(node: Node, action: str) -> Any:
     return raw.QueryInterface(interface)
 
 
+def _toggle_state(pattern: Any) -> Any:
+    """Toggle sonrasi yeni durum. Oge yeniden olusunca okuma hata verebiliyor;
+    eylem yapildigi halde hata donunce model tekrar deneyip geri ceviriyordu."""
+    try:
+        return pattern.CurrentToggleState
+    except Exception:  # noqa: BLE001
+        return "? (yeni durum okunamadi)"
+
+
 def apply(node: Node, action: str, value: str | None = None) -> str:
     """Ogeye deseni uygula, ne olduguna dair kisa bir ozet dondur."""
     pattern = _get(node, action)
@@ -57,7 +66,7 @@ def apply(node: Node, action: str, value: str | None = None) -> str:
     if action == "toggle":
         before = pattern.CurrentToggleState
         pattern.Toggle()
-        return f"{node.label} degistirildi (ToggleState {before} -> {pattern.CurrentToggleState})."
+        return f"{node.label} degistirildi (ToggleState {before} -> {_toggle_state(pattern)})."
 
     if action == "value":
         if value is None:

@@ -13,7 +13,7 @@ _INVISIBLE = re.compile("[​‎‏‪-‮⁦-⁩﻿]")
 
 #: Qt, adi olmayan ogeye ad olarak nesne yolunu veriyor:
 #: "QApplication.MainWindow.QWebEngineView.QObject.viewer.pages.QObject..." --
-#: SadePDF'te ciktinin yarisi buydu. Bu bir ad degil, gurultu.
+#: Bir Qt PDF goruntuleyicide ciktinin yarisi buydu. Bu bir ad degil, gurultu.
 _QT_OBJECT_PATH = re.compile(r"^(?:QApplication|QObject|QWidgetWindow)(?:\.\w+)+$")
 
 

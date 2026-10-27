@@ -58,13 +58,16 @@ def _bitmap_to_image(hdc_mem: int, bitmap: int, width: int, height: int) -> Imag
     return Image.frombuffer("RGB", (width, height), buffer, "raw", "BGRX", 0, 1)
 
 
-def capture_window(hwnd: int) -> tuple[Image.Image, tuple[int, int], bool]:
-    """Pencereyi yakala. Doner: (goruntu, ekrandaki sol-ust kosesi, yanit veriyor mu).
+def capture_window(hwnd: int) -> tuple[Image.Image, tuple[int, int], str]:
+    """Pencereyi yakala. Doner: (goruntu, ekrandaki sol-ust kosesi, nasil).
+
+    nasil: "kendi" -- pencerenin kendi cizimi; "bos" -- PrintWindow bos dondu,
+    "yanitsiz" -- pencere yanit vermedi. Son ikisinde ekrandan kirpiliyor:
+    ustu ortuluyse ustteki pencere gorunur (bkz. covered_by).
 
     PrintWindow pencereye senkron mesaj gonderiyor: donmus pencerede pencere
     kendine gelene kadar bekliyordu (olculdu: 14.7 sn). Yanit vermeyen
-    pencere ekrandan kirpiliyor -- ustu ortuluyse ustteki gorunur, ama
-    sunucu kilitlenmez. Ucuncu deger False ise boyle oldu.
+    pencere bu yuzden hic denenmeden kirpiliyor; sunucu kilitlenmez.
     """
     if not windows.is_window(hwnd):
         raise LookupError(f"hwnd {hwnd} artik yok.")
@@ -73,7 +76,7 @@ def capture_window(hwnd: int) -> tuple[Image.Image, tuple[int, int], bool]:
     if width <= 0 or height <= 0:
         raise ValueError(f"hwnd {hwnd} penceresinin gorunur alani yok (simge durumunda olabilir).")
     if not windows.responds(hwnd):
-        return capture_region(left, top, width, height), (left, top), False
+        return capture_region(left, top, width, height), (left, top), "yanitsiz"
 
     hdc_window = user32.GetWindowDC(ctypes.c_void_p(hwnd))
     hdc_mem = gdi32.CreateCompatibleDC(hdc_window)
@@ -83,12 +86,30 @@ def capture_window(hwnd: int) -> tuple[Image.Image, tuple[int, int], bool]:
         ok = user32.PrintWindow(ctypes.c_void_p(hwnd), hdc_mem, PW_RENDERFULLCONTENT)
         image = _bitmap_to_image(hdc_mem, bitmap, width, height)
         if not ok or _looks_blank(image):
-            return capture_region(left, top, width, height), (left, top), True
-        return image, (left, top), True
+            return capture_region(left, top, width, height), (left, top), "bos"
+        return image, (left, top), "kendi"
     finally:
         gdi32.DeleteObject(bitmap)
         gdi32.DeleteDC(hdc_mem)
         user32.ReleaseDC(ctypes.c_void_p(hwnd), hdc_window)
+
+
+def covered_by(hwnd: int) -> int:
+    """Ekrandan kirpilan goruntude pencerenin yerinde baska pencere var mi?
+
+    Pencerenin ortasi ve dort ic kosesine bakar; ilk yabanci ust duzey
+    pencereyi dondurur, hepsi kendisiyse 0.
+    """
+    left, top, right, bottom = windows.frame_rect(hwnd)
+    dx, dy = (right - left) // 5, (bottom - top) // 5
+    points = [((left + right) // 2, (top + bottom) // 2),
+              (left + dx, top + dy), (right - dx, top + dy),
+              (left + dx, bottom - dy), (right - dx, bottom - dy)]
+    for x, y in points:
+        found = windows.top_level_at(x, y)
+        if found and found != hwnd:
+            return found
+    return 0
 
 
 def _looks_blank(image: Image.Image) -> bool:

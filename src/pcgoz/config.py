@@ -38,6 +38,10 @@ LOG_DIR = Path(os.environ.get("PCGOZ_LOG_DIR") or DEFAULT_LOG_DIR)
 LOG_PATH = LOG_DIR / "actions.jsonl"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 
+#: pc_wait_for'un azami beklemesi. Dongu UIA ipliginin disinda oldugu icin
+#: worker.CALL_TIMEOUT_S'ye bagli degil; dosya yuklemesi gibi isler 600 sn istedi.
+WAIT_FOR_MAX_S = 600.0
+
 
 def legacy_log_dirs() -> list[Path]:
     """0.4.0'a kadarki gunluk yerleri: %LOCALAPPDATA%\\PcGoz ve paketlerin sanal kopyalari."""

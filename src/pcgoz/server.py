@@ -12,7 +12,9 @@ hic ortaya cikmiyor.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import functools
+import hashlib
 import time
 from typing import Annotated, Any, Callable, Literal, TypeVar
 
@@ -22,8 +24,8 @@ from mcp.server.mcpserver.utilities.func_metadata import func_metadata
 from pydantic import Field
 
 from . import __version__
-from . import (capture, clipboard, config, effects, inputguard, ocr, patterns, render, safety,
-               uia, windows, worker)
+from . import (capture, clipboard, config, effects, inputguard, occlusion, ocr, patterns, render,
+               safety, uia, windows, worker)
 from .input import (
     KeyParseError,
     click as _click,
@@ -103,17 +105,12 @@ def _tool(**options: Any) -> Callable[[F], F]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             # Her cagri bir kimlik alir; sonucu ve suresi gunluge yazilir.
             token = safety.CALL_ID.set(safety.next_call_id())
-            started = time.perf_counter()
             try:
-                result = fn(*args, **kwargs)
+                return _audited(fn.__name__, lambda: fn(*args, **kwargs), kwargs)
             except Exception as exc:  # noqa: BLE001 -- metin modele gitsin
-                safety.audit_outcome(fn.__name__, started, exc)
                 if isinstance(exc, ToolError):
                     raise
                 raise ToolError(f"{type(exc).__name__}: {exc}") from exc
-            else:
-                safety.audit_outcome(fn.__name__, started, None)
-                return result
             finally:
                 safety.CALL_ID.reset(token)
 
@@ -123,6 +120,106 @@ def _tool(**options: Any) -> Callable[[F], F]:
         return fn
 
     return decorator
+
+
+#: Bu cagrinin hedef penceresi ve eylem oncesi durumu: bayat icerik uyarisi hangi
+#: pencereye bakacagini buradan bilir. Sozluk nesnesi paylasiliyor: worker.call baglami
+#: kopyalasa da UIA ipliginde yapilan yazim ayni sozluge gider.
+_CALL_NOTES: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "pcgoz_cagri_notlari", default=None)
+
+
+def _audited(name: str, call: Callable[[], Any], kwargs: dict[str, Any] | None = None,
+             **fields: Any) -> Any:
+    """Araci calistir, sonucunu ve suresini gunluge yaz; hedefin icerigi bayat olabilirse
+    sonuca (hatada hata metnine) tek satir [!] uyarisi ekle. pc_batch adimlari da buradan
+    gecer. kwargs: aracin argumanlari (canli testlerle ayni imza; gunluge yazilmaz)."""
+    notes: dict[str, Any] = {}
+    token = _CALL_NOTES.set(notes)
+    started = time.perf_counter()
+    try:
+        result = call()
+    except Exception as exc:
+        extra = _stale_note(name, notes)
+        safety.audit_outcome(name, started, exc, **fields, **_stale_field(notes))
+        if extra and exc.args and isinstance(exc.args[0], str):
+            exc.args = (f"{exc.args[0]}\n{extra}", *exc.args[1:])
+        raise
+    finally:
+        _CALL_NOTES.reset(token)
+    result = _with_extra(result, _stale_note(name, notes))
+    safety.audit_outcome(name, started, None, **fields, **_stale_field(notes))
+    return result
+
+
+#: Sonucu ekranin/pencerenin o anki icerigine dayanan araclar; goruntu alanlar ayrica.
+_STALE_CHECKED = frozenset({"pc_read", "pc_find", "pc_text", "pc_screenshot", "pc_ocr",
+                            "pc_wait_for", "pc_invoke", "pc_do"})
+_IMAGE_TOOLS = frozenset({"pc_screenshot", "pc_ocr"})
+_ACTION_TOOLS = frozenset({"pc_invoke", "pc_do"})
+
+
+def _stale_note(name: str, notes: dict[str, Any]) -> str | None:
+    """Hedefin icerigi bayat olabilir mi? Neden sonuc kaydina "bayat" olarak girer.
+
+    Tamamen ortulu Chromium penceresi sayfayi cizmiyor, UIA metnini de guncellemiyor:
+    model ortuldugu andaki sayfayi okuyup buna gore tikliyordu (olcum: occlusion.py).
+    Kontrol araci hicbir zaman bozmaz.
+    """
+    before = notes.pop("_bayat_once", None)        # _watch: eylemden onceki durum
+    if name not in _STALE_CHECKED:
+        return None
+    if name in _ACTION_TOOLS and before == "taze":
+        return None                                 # sonraki bayatlik eylemin kendi sonucu
+    try:
+        found = occlusion.stale_reason(notes.get("hwnd"), image=name in _IMAGE_TOOLS)
+    except Exception:  # noqa: BLE001
+        return None
+    if found is None:
+        return None
+    notes["bayat"], text = found
+    if name in _ACTION_TOOLS:
+        text += (" Eylemin etkisi gorunmeyebilir: tekrarlama." if notes["bayat"] == "ust_hep_ustte"
+                 else " Eylemin etkisi gorunmeyebilir: tekrarlamadan once pc_focus ile bak.")
+    return text
+
+
+def _stale_field(notes: dict[str, Any]) -> dict[str, Any]:
+    return {"bayat": notes["bayat"]} if notes.get("bayat") else {}
+
+
+def _stale_key(hwnd: int) -> str:
+    """Eylem oncesi durum: bayatlik nedeni ya da "taze" (kontrol bozuksa da: uyari cikmaz)."""
+    try:
+        found = occlusion.stale_reason(hwnd, image=False)
+    except Exception:  # noqa: BLE001
+        return "taze"
+    return found[0] if found else "taze"
+
+
+def _content_stale(hwnd: int) -> bool:
+    try:
+        return occlusion.stale_reason(hwnd, image=False) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _with_extra(result: Any, extra: str | None) -> Any:
+    if not extra:
+        return result
+    if isinstance(result, str):
+        return f"{result}\n{extra}"
+    if isinstance(result, list) and result and isinstance(result[0], str):
+        return [f"{result[0]}\n{extra}", *result[1:]]
+    return result
+
+
+def _note_target(hwnd: int) -> int:
+    """Hedef pencereyi bu cagrinin notuna yaz: bayat icerik kontrolu ona bakar."""
+    notes = _CALL_NOTES.get()
+    if notes is not None and hwnd:
+        notes["hwnd"] = hwnd
+    return hwnd
 
 
 # --------------------------------------------------------------------------
@@ -140,7 +237,13 @@ def _active_popup() -> windows.WindowInfo | None:
 
 
 def _resolve_hwnd(hwnd: int | None, query: str | None, *, prefer_popup: bool = False) -> int:
-    """Hedef pencereyi belirle: acik hwnd > baslik aramasi > acik menu > on plandaki."""
+    """Hedef pencereyi belirle: acik hwnd > baslik aramasi > acik menu > on plandaki.
+
+    Secilen pencere cagrinin notuna yazilir: bayat icerik kontrolu ona bakar."""
+    return _note_target(_pick_hwnd(hwnd, query, prefer_popup))
+
+
+def _pick_hwnd(hwnd: int | None, query: str | None, prefer_popup: bool) -> int:
     if hwnd:
         if not windows.is_window(hwnd):
             raise LookupError(f"hwnd {hwnd} artik yok. pc_windows ile guncel listeyi al.")
@@ -169,7 +272,16 @@ def _resolve_hwnd(hwnd: int | None, query: str | None, *, prefer_popup: bool = F
 
 def _snapshot(hwnd: int) -> uia.Node:
     registry.new_generation()      # bayat ref mesaji "kac okuma once" diyebilsin
-    tree = uia.snapshot_window(hwnd, onscreen_only=config.ONSCREEN_ONLY)
+    try:
+        tree = uia.snapshot_window(hwnd, onscreen_only=config.ONSCREEN_ONLY)
+    except Exception as exc:
+        # E_FAIL ("Belirtilmemis hata") bir kez daha denenir: gunlukte find, screenshot,
+        # read, wait_for ve text okumalarinda gorulen COMError'larin hepsi buydu.
+        # Digerleri (UIA_E_TIMEOUT vb.) aynen gecer.
+        if not uia.is_fail(exc):
+            raise
+        time.sleep(0.15)
+        tree = uia.snapshot_window(hwnd, onscreen_only=config.ONSCREEN_ONLY)
     _last["hwnd"] = hwnd
     _last["tree"] = tree
     return tree
@@ -280,6 +392,13 @@ def _watch(target: int, act: Callable[[], str], observe: bool, *,
     istenmediyse ozet bos. Ozetteki yeni ogelere ref verilir -- model onlara
     ayrica pc_read yapmadan dokunabilsin.
     """
+    if target:
+        _note_target(target)            # bayat icerik kontrolu hedefi bilsin
+        # Eylemden ONCE de bakilir: eylem hedefi kendisi kucultur, gizler ya da orterse
+        # sonradan bayat gorunur ama eylem yapilmistir; uyari pc_focus'la geri aldirirdi.
+        notes = _CALL_NOTES.get()
+        if notes is not None:
+            notes["_bayat_once"] = _stale_key(target)
     if not observe:
         return act(), "", True
     before = effects.capture(target)
@@ -290,6 +409,11 @@ def _watch(target: int, act: Callable[[], str], observe: bool, *,
         register=lambda node: registry.register(node, after.target),
     )
     return result, summary, changed
+
+
+def _digest(text: str) -> str:
+    """sha256'nin ilk 12 hanesi: ayni metnin tekrarlandigi metnin kendisi olmadan gorunur."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
 def _type(ref: str | None, text: str | None, paste: bool, observe: bool) -> str:
@@ -311,9 +435,11 @@ def _type(ref: str | None, text: str | None, paste: bool, observe: bool) -> str:
     use_paste = paste or len(text) > config.AUTO_PASTE_OVER
     auto = use_paste and not paste
 
+    # Metnin kendisi gunluge yazilmaz, ozeti yazilir; ayni metnin tekrar yazildigi
+    # ozetten yine anlasilir.
     safety.audit("pc_do", action="type", ref=ref,
                  target=target.label if target else "odakta oge yok",
-                 chars=len(text), paste=use_paste, auto_paste=auto or None, text=text)
+                 chars=len(text), paste=use_paste, auto_paste=auto or None, text_sha=_digest(text))
     if config.DRY_RUN:
         return f"[DRY RUN] {len(text)} karakter yazilmadi."
     before_value = uia.live_value(target) if target else None
@@ -442,7 +568,7 @@ def pc_read(
     def run() -> str:
         if ref_id:
             node = registry.resolve(ref_id)
-            hwnd_owner = registry.owning_hwnd(ref_id) or _resolve_hwnd(hwnd, query)
+            hwnd_owner = _note_target(registry.owning_hwnd(ref_id) or _resolve_hwnd(hwnd, query))
             tree = uia.snapshot(node.el, onscreen_only=config.ONSCREEN_ONLY)
             info = windows.describe(hwnd_owner) if windows.is_window(hwnd_owner) else None
             head = f"{ref_id} alt agaci ({node.label})"
@@ -524,12 +650,32 @@ def pc_text(
     def run() -> str:
         if ref_id:
             node = registry.resolve(ref_id)
+            _note_target(registry.owning_hwnd(ref_id))      # bayat icerik kontrolu
             return patterns.collect_text(node, limit=max_chars) or "(metin yok)"
         target = _resolve_hwnd(hwnd, query, prefer_popup=True)
         tree = _snapshot(target)
         return patterns.collect_text(tree, limit=max_chars) or "(metin yok)"
 
     return worker.call(run)
+
+
+def _crop_warning(target: int, how: str) -> tuple[str, bool]:
+    """Pencere ekrandan kirpildiysa etiket uyarisi. Doner: (uyari, ustu ortulu mu).
+
+    Kirpmada ustteki pencere gorunur; bunu soylemezsek model arkadaki pencereye
+    baktigini sanip yanlis seyi okuyor.
+    """
+    if how == "kendi":
+        return "", False
+    why = ("Pencere yanit vermiyor (donmus ya da mesgul)" if how == "yanitsiz"
+           else "Pencere kendi cizimini vermedi (PrintWindow bos)")
+    cover = capture.covered_by(target)
+    if not cover:
+        return f"\n[!] {why}: ekrandan kirpildi, ustu acik.", False
+    other = windows.describe(cover)
+    return (f"\n[!] {why}: ekrandan kirpildi ve USTU ORTULU -- resimde hedef degil "
+            f"hwnd={cover} {other.process} \"{other.title[:50]}\" gorunuyor. Once pc_focus, "
+            "sonra tekrar cek."), True
 
 
 @_tool(
@@ -574,12 +720,11 @@ def pc_screenshot(
                     f"hwnd {target} simge durumunda -- yakalanacak gorunur alani yok. "
                     "Once pc_focus ile geri getir."
                 )
-            image, origin, responsive = capture.capture_window(target)
-            label = f"hwnd={target} {info.process} \"{info.title}\""
-            if not responsive:
-                label += ("\n[!] Pencere yanit vermiyor (donmus ya da mesgul): kendi cizimi "
-                          "alinamadi, ekrandan kirpildi -- ustu ortuluyse ustteki gorunur. "
-                          "Kutu cizilmedi.")
+            image, origin, how = capture.capture_window(target)
+            warning, covered = _crop_warning(target, how)
+            label = f"hwnd={target} {info.process} \"{info.title}\"{warning}"
+            if how == "yanitsiz" or covered:
+                label += " Kutu cizilmedi."
                 boxes_wanted = False
             if boxes_wanted:
                 nodes, gone = _boxes_for(_tree_for(target), target)
@@ -603,9 +748,7 @@ def pc_screenshot(
         png, size, factor = capture.to_png(image, scale=scale)
 
         note = f"{label}\nyakalanan: {raw_size[0]}x{raw_size[1]} fiziksel piksel"
-        if (windows.input_desktop_name() or "").lower() != "default":
-            note += ("\n[!] GUVENLI MASAUSTU acik (UAC / Ctrl+Alt+Del / kilit ekrani): ekran "
-                     "goruntusu onu gostermez, kararmis ya da eski olabilir. Kullanici yanitlamali.")
+        # Guvenli masaustu, ekran kapali, ortulu Chromium: _audited ekler (occlusion.stale_reason).
         if abs(factor - 1.0) > 0.001:
             note += f" -> gonderilen: {size[0]}x{size[1]} (olcek {factor:.3f})"
             if scale is not None and factor < scale - 0.001:
@@ -662,11 +805,9 @@ def pc_ocr(
             info = windows.describe(target)
             if info.minimized:
                 raise ValueError(f"hwnd {target} simge durumunda. Once pc_window restore ile geri getir.")
-            image, origin, responsive = capture.capture_window(target)
-            label = f"hwnd={target} {info.process} \"{info.title[:50]}\""
-            if not responsive:
-                label += " (yanit vermiyor: ekrandan kirpildi, ustu ortuluyse ustteki okunur)"
-            return image, origin, label
+            image, origin, how = capture.capture_window(target)
+            warning, _ = _crop_warning(target, how)
+            return image, origin, f"hwnd={target} {info.process} \"{info.title[:50]}\"{warning}"
         image, origin = capture.capture_screen()
         return image, origin, "tum ekran"
 
@@ -735,7 +876,9 @@ def pc_invoke(
         if config.DRY_RUN:
             return f"[DRY RUN] {node.label} uzerinde '{action}' yapilmadi."
         result, summary, changed = _watch(hwnd, lambda: patterns.apply(node, action, value), observe)
-        if observe and action == "invoke" and not changed:
+        # Bayat Chromium penceresinde "degisiklik yok" eylemin etkisizligi demek degil:
+        # tiklama onerisi eylemi ikiletirdi.
+        if observe and action == "invoke" and not changed and not _content_stale(hwnd):
             # Olculen durum (31 Agustos): Invoke basarili dondu, hicbir sey
             # olmadi, ayni butona 4 sn sonra fiziksel olarak tiklandi.
             summary += ("\nInvoke basarili dondu ama hicbir sey degismedi -- bazi uygulamalar "
@@ -894,37 +1037,58 @@ def pc_wait_for(
     until: Annotated[Literal["appear", "disappear"], Field(description="Belirmesini mi kaybolmasini mi")] = "appear",
     timeout: Annotated[float, Field(description="Azami bekleme (saniye)")] = 10.0,
 ) -> str:
-    def run() -> str:
-        needle = fold(query)
-        deadline = time.monotonic() + max(0.5, min(120.0, timeout))
-        polls = 0
-        while time.monotonic() < deadline:
-            safety.check_not_frozen()
-            polls += 1
-            try:
-                target = _resolve_hwnd(hwnd, window_query)
-                tree = _snapshot(target)
-                found = [
-                    n for n in tree.walk()
-                    if n.area > 0 and not n.offscreen
-                    and (needle in fold(n.text) or needle in fold(n.value))
-                ]
-            except LookupError:
-                found = []
-                target = 0
-            if until == "appear" and found:
-                body = render.render_matches(found, target, limit=5)
-                return f"{query!r} belirdi ({polls} yoklama sonrasi):\n\n{body}"
-            if until == "disappear" and not found:
-                return f"{query!r} kayboldu ({polls} yoklama sonrasi)."
-            time.sleep(0.35)
-        state = "belirmedi" if until == "appear" else "hala duruyor"
-        return (
-            f"ZAMAN ASIMI: {query!r} {timeout} saniyede {state} ({polls} yoklama). "
-            "pc_read ile ekranda ne oldugune bak."
-        )
+    needle = fold(query)
+    limit = max(0.5, min(config.WAIT_FOR_MAX_S, timeout))
 
-    return worker.call(run)
+    def poll() -> str | None:
+        """Tek yoklama (UIA ipliginde). Doner: bekleme bittiyse sonuc govdesi, yoksa None.
+
+        Agac _snapshot ile degil dogrudan okunur: dongu iscinin disinda, yoklamalar
+        baska cagrilarla ic ice geciyor; _last'i (pc_screenshot kutulari ondan
+        cizilir) ve ref kusagini ezmesin.
+        """
+        try:
+            target = _resolve_hwnd(hwnd, window_query)
+            tree = uia.snapshot_window(target, onscreen_only=config.ONSCREEN_ONLY)
+            found = [
+                n for n in tree.walk()
+                if n.area > 0 and not n.offscreen
+                and (needle in fold(n.text) or needle in fold(n.value))
+            ]
+        except LookupError:
+            found = []
+            target = 0
+        except Exception as exc:
+            if not uia.is_fail(exc):
+                raise
+            return None        # gecici E_FAIL: bu tur sonuc sayilmaz ("kayboldu" da), yoklama surer
+        if until == "appear" and found:
+            return render.render_matches(found, target, limit=5)
+        if until == "disappear" and not found:
+            return ""
+        return None
+
+    # Dongu UIA ipliginin DISINDA, her yoklama ayri ve kisa bir worker.call.
+    # Eskiden butun dongu tek cagriydi: worker.CALL_TIMEOUT_S'yi gecen bekleme
+    # ipligi "takili" gosteriyor, arkasindaki cagrilari da dusuruyordu (gunlukteki
+    # zaman asimlarinin cogu bu zincirdendi). Aradaki uykuda baska araclar da calisir.
+    deadline = time.monotonic() + limit
+    polls = 0
+    while time.monotonic() < deadline:
+        safety.check_not_frozen()
+        polls += 1
+        body = worker.call(poll)
+        if body is not None:
+            if until == "appear":
+                return f"{query!r} belirdi ({polls} yoklama sonrasi):\n\n{body}"
+            return f"{query!r} kayboldu ({polls} yoklama sonrasi)."
+        time.sleep(0.35)
+    state = "belirmedi" if until == "appear" else "hala duruyor"
+    capped = f" (istenen {timeout:g} sn, ust sinir {limit:g} sn)" if limit < timeout else ""
+    return (
+        f"ZAMAN ASIMI: {query!r} {limit:g} saniyede {state} ({polls} yoklama){capped}. "
+        "pc_read ile ekranda ne oldugune bak."
+    )
 
 
 @_tool(
@@ -983,11 +1147,12 @@ def pc_focus(
         safety.audit("pc_focus", hwnd=target, title=info.title, process=info.process)
         if config.DRY_RUN:
             return f"[DRY RUN] {info.title!r} one alinmadi."
-        windows.focus(target)
+        _focus_and_wake(target)
         time.sleep(0.2)
         now = windows.foreground_window()
-        if now == target:
-            return f"hwnd={target} \"{info.title}\" -- on planda"
+        note = _front_note(target, now)
+        if note is not None:
+            return f"hwnd={target} \"{info.title}\" -- on planda{note}"
         # Windows'un odak kilidi: on plandaki surec biz degilsek (or. kullanici
         # gorev cubuguna tiklamissa) SetForegroundWindow reddediliyor. Olculdu:
         # ipliklere baglanma, Alt hilesi, SwitchToThisWindow -- hicbiri asmiyor.
@@ -1002,13 +1167,50 @@ def pc_focus(
             _move(*home, steps=1)               # kullanicinin imleci yerine donsun
             time.sleep(0.2)
             now = windows.foreground_window()
-            if now == target:
+            note = _front_note(target, now)
+            if note is not None:
                 return (f"hwnd={target} \"{info.title}\" -- on planda (Windows odak kilidi "
-                        f"vardi; baslik cubuguna {point} tiklanarak one alindi)")
+                        f"vardi; baslik cubuguna {point} tiklanarak one alindi){note}")
+        # Baslik ortulu ya da tiklama tutmadi: kucult + geri getir. Simge durumundan
+        # geri gelen pencere odak kilidine takilmadan one geliyor (olculdu). Girdi
+        # gondermez.
+        # show beklemiyor (ShowWindowAsync), focus da yalniz o an simge durumundaki
+        # pencereyi geri getiriyor: kuculmeyi gec isleyen pencere sonradan kuculup
+        # kucuk kalabiliyordu. Yanit vermeyen pencere hic kucultulmez, focus kuculme
+        # gorulunce cagrilir, cikista simge durumundaysa geri getirilir.
+        responsive = windows.responds(target)
+        if responsive:
+            safety.check_not_frozen()      # acil durdurma ilk denemelerden sonra basilmis olabilir
+            safety.audit("pc_focus", hwnd=target, detail="kucult + geri getir")
+            visible = windows.is_visible(target)
+            try:
+                windows.show(target, "minimize")
+                deadline = time.monotonic() + 1.0
+                while time.monotonic() < deadline and not windows.is_minimized(target):
+                    time.sleep(0.03)
+                if windows.is_minimized(target):
+                    windows.focus(target)
+                    time.sleep(0.2)
+            finally:
+                # Kuculme gec islenirse diye gorulmediyse kisa bir sure sonra bir kez
+                # daha bakilir. Tepsiye saklanan uygulama kuculunce pencereyi gizler:
+                # once gorunurduyse gizli de kalmasin. Yalniz gerekirse: SW_RESTORE
+                # buyutulmus pencereyi normal boyuta indirir.
+                if not windows.is_minimized(target):
+                    time.sleep(0.3)
+                if windows.is_minimized(target) or (visible and not windows.is_visible(target)):
+                    windows.show(target, "restore")
+            now = windows.foreground_window()
+            note = _front_note(target, now)
+            if note is not None:
+                return (f"hwnd={target} \"{info.title}\" -- on planda (Windows odak kilidi "
+                        f"vardi; pencere kucultulup geri getirilerek one alindi){note}")
         holder = windows.describe(now) if now else None
         where = f"hwnd={now} {holder.process} {holder.cls}" if holder else "(yok)"
-        tried = ("baslik cubuguna tiklama da tutmadi" if point else
-                 "baslik cubugunda guvenli tiklama noktasi yok (ortulu ya da ozel cizim)")
+        rest = ("kucultup geri getirme de tutmadi" if responsive else
+                "pencere yanit vermedigi icin kucultup geri getirme denenmedi")
+        tried = (f"baslik cubuguna tiklama da tutmadi, {rest}" if point else
+                 f"baslik cubugunda guvenli tiklama noktasi yok (ortulu ya da ozel cizim), {rest}")
         return (
             f"UYARI: hwnd={target} \"{info.title}\" one ALINAMADI -- Windows odak degisimini "
             f"engelledi, {tried}; on planda hala {where} var. Klavye girdisi (key/type) ORAYA "
@@ -1017,6 +1219,33 @@ def pc_focus(
         )
 
     return _acting(run)
+
+
+def _focus_and_wake(target: int) -> None:
+    """One al; Chromium ise ortulu pencere hesabini hemen yenilet.
+
+    Zaten on plandaki pencere ortunun ustune ciksa da odak olayi yok: Chromium
+    ortunun kalktigini fark etmeyip >=2,5 sn bayat kaliyordu. Ekranin tazelenmesi
+    ~30-60 ms, cagiranin 0,2 sn'lik beklemesi icinde.
+    """
+    windows.focus(target)
+    if occlusion.is_chromium(target):
+        occlusion.wake()
+
+
+def _front_note(target: int, now: int) -> str | None:
+    """On planda hedef var mi? None: yok. Metin: var, sonuca eklenecek not.
+
+    Hedefin kalici iletisim kutusu acikken on plan o kutudur, kok sahibi hedeftir;
+    bu basarisizlik sayilirsa basliga tiklanip pencere kucultulup geri getirilir.
+    Klavye girdisi kutuya gider; model bunu bilmeli.
+    """
+    if now == target:
+        return ""
+    if not now or windows.root_owner(now) != target:
+        return None
+    return (f"\nOnunde kendi iletisim kutusu acik: hwnd={now} \"{windows.describe(now).title[:60]}\" "
+            "-- klavye girdisi oraya gider.")
 
 
 @_tool(
@@ -1151,15 +1380,42 @@ def pc_batch(
         safety.check_user_not_busy(any((step.get("input") or {}).get("force")
                                        for step in actions if isinstance(step, dict)))
     with inputguard.hold(config.BLOCK_BATCH_MAX_S) if inputs else contextlib.nullcontext():
-        return _run_steps(actions, names, last_act)
+        lock_until = time.monotonic() + config.BLOCK_BATCH_MAX_S if inputs else None
+        return _run_steps(actions, names, last_act, lock_until)
 
 
-def _run_steps(actions: list[dict[str, Any]], names: list[str], last_act: int) -> list[Any]:
+def _clip_wait(given: dict[str, Any], lock_until: float, key: str = "timeout",
+               default: float = 10.0) -> tuple[dict[str, Any], str]:
+    """Kilit tutan toplu isteki bekleme adimini kalan kilit suresine kirp.
+
+    key: sureyi veren arguman, default: verilmezse aracin bekledigi sure.
+    Kilit BLOCK_BATCH_MAX_S sonra girdiyi birakiyor ama uyari, kanca ve oturumlar
+    arasi mutex toplu is bitene dek kaliyor: 600 sn'lik bekleme baska oturumlari
+    OtherSession'a dusurur, kullanici da 10 dk "kilit" uyarisi gorurdu. Yalniz
+    pc_wait_for kirpiliyordu; pc_do wait de (her biri en cok 30 sn) birkac adimda
+    siniri asabiliyordu.
+    """
+    value = given.get(key)
+    try:
+        wanted = float(default if value is None else value)
+    except (TypeError, ValueError):
+        return given, ""                     # dogrulama hatasi kendi yolundan gelsin
+    remain = round(max(0.5, lock_until - time.monotonic()), 1)
+    if wanted <= remain:
+        return given, ""
+    return ({**given, key: remain},
+            f"\n(girdi kilidi tutan toplu iste bekleme {wanted:g} sn yerine {remain:g} sn'ye "
+            "kirpildi; uzun beklemeyi toplu isin disinda ayri cagir)")
+
+
+def _run_steps(actions: list[dict[str, Any]], names: list[str], last_act: int,
+               lock_until: float | None = None) -> list[Any]:
     batch_id = safety.CALL_ID.get()
     out: list[Any] = []
     for index, step in enumerate(actions):
         name = step.get("name") if isinstance(step, dict) else None
         head = f"[{index + 1}/{len(actions)}] {name}"
+        clipped = ""
         try:
             if name not in _RAW or name == "pc_batch":
                 raise ValueError(f"bilinmeyen arac {name!r}. Secenekler: {', '.join(names)}")
@@ -1168,16 +1424,16 @@ def _run_steps(actions: list[dict[str, Any]], names: list[str], last_act: int) -
                 raise ValueError("input bir nesne olmali: {\"action\": ..., ...}")
             if name in _OBSERVING and "observe" not in given:
                 given = {**given, "observe": index == last_act}
+            if name == "pc_wait_for" and lock_until is not None:
+                given, clipped = _clip_wait(given, lock_until)
+            elif name == "pc_do" and given.get("action") == "wait" and lock_until is not None:
+                given, clipped = _clip_wait(given, lock_until, "duration", 1.0)
             # Her adim kendi kimligini alir; gunlukte hangi topluya ait oldugu gorunur.
+            # Tek cagriyla ayni yol: bayat icerik uyarisi adimin sonucuna eklenir.
             token = safety.CALL_ID.set(safety.next_call_id())
-            started = time.perf_counter()
             try:
-                result = _RAW[name](**_VALIDATE[name](given))
-            except Exception as exc:
-                safety.audit_outcome(name, started, exc, batch=batch_id)
-                raise
-            else:
-                safety.audit_outcome(name, started, None, batch=batch_id)
+                result = _audited(name, lambda: _RAW[name](**_VALIDATE[name](given)), given,
+                                  batch=batch_id)
             finally:
                 safety.CALL_ID.reset(token)
         except Exception as exc:  # noqa: BLE001 -- adim hatasi rapora girer, toplu is durur
@@ -1190,7 +1446,7 @@ def _run_steps(actions: list[dict[str, Any]], names: list[str], last_act: int) -
             out.append(f"{head}: {result[0]}")
             out.extend(result[1:])
         else:
-            out.append(f"{head}: {result}")
+            out.append(f"{head}: {result}{clipped}")
     return _merge_text(out)
 
 

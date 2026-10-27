@@ -80,6 +80,15 @@ SMTO_ABORTIFHUNG = 0x0002
 #: UIA cagrisi zaman asimina ugradiginda donen HRESULT (UIA_E_TIMEOUT).
 UIA_E_TIMEOUT = -2146233083
 
+#: E_FAIL, Turkce Windows'ta "Belirtilmemis hata". Gunlukteki COMError'larin hepsi buydu.
+E_FAIL = -2147467259
+
+
+def is_fail(exc: BaseException) -> bool:
+    """COMError E_FAIL mi? (Zaman asimi, erisim reddi gibi digerleri degil.)"""
+    return isinstance(exc, comtypes.COMError) and exc.hresult == E_FAIL
+
+
 #: Donmus bir saglayiciya baglanma / islem suresi siniri (ms).
 CONNECTION_TIMEOUT_MS = 2000
 TRANSACTION_TIMEOUT_MS = 10000

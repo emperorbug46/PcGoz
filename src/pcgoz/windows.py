@@ -334,6 +334,16 @@ def responds(hwnd: int, timeout_ms: int = RESPOND_TIMEOUT_MS) -> bool:
         ctypes.c_void_p(hwnd), WM_NULL, 0, 0, SMTO_ABORTIFHUNG, timeout_ms, ctypes.byref(result)))
 
 
+def is_minimized(hwnd: int) -> bool:
+    """Pencere simge durumunda mi? show() beklemedigi icin sonucu boyle yoklanir."""
+    return bool(user32.IsIconic(ctypes.c_void_p(hwnd)))
+
+
+def is_visible(hwnd: int) -> bool:
+    """WS_VISIBLE: simge durumundaki pencere de gorunur sayilir, tepsiye saklanan sayilmaz."""
+    return bool(user32.IsWindowVisible(ctypes.c_void_p(hwnd)))
+
+
 def show(hwnd: int, action: str) -> None:
     """minimize / maximize / restore. Async: askidaki pencerede bizi bekletmesin."""
     command = {"minimize": SW_MINIMIZE, "maximize": SW_MAXIMIZE, "restore": SW_RESTORE}[action]
@@ -376,6 +386,13 @@ def move_frame(hwnd: int, x: int, y: int, width: int, height: int) -> None:
 
 
 GA_ROOT = 2
+GA_ROOTOWNER = 3
+
+
+def root_owner(hwnd: int) -> int:
+    """Sahiplik zincirinin kokundeki pencere: kalici iletisim kutusu icin sahibi
+    olan ana pencere. Sahipsiz pencerede kendisi, yoksa 0."""
+    return int(user32.GetAncestor(ctypes.c_void_p(hwnd), GA_ROOTOWNER) or 0)
 
 
 def top_level_at(x: int, y: int) -> int:

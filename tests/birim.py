@@ -12,6 +12,7 @@ import ctypes
 ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 
 from ctypes import wintypes  # noqa: E402
+from typing import Any  # noqa: E402
 
 from pcgoz import input as pin  # noqa: E402
 from pcgoz import safety  # noqa: E402
@@ -281,6 +282,123 @@ def test_worker_timeout() -> None:
         check("is parcacigi sonra yine calisiyor", worker.call(lambda: 42) == 42)
     finally:
         worker.CALL_TIMEOUT_S = original
+
+
+def test_wait_for_outside_worker() -> None:
+    print("pc_wait_for: yoklama dongusu UIA ipliginin disinda")
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from pcgoz import config, server, uia, worker
+
+    saved = (worker.CALL_TIMEOUT_S, config.WAIT_FOR_MAX_S, server._resolve_hwnd, uia.snapshot_window)
+    worker.CALL_TIMEOUT_S = 0.4          # eskiden 0.4 sn'yi gecen bekleme "takili" diye duserdi
+    server._resolve_hwnd = lambda hwnd, query, **_: 1
+    uia.snapshot_window = lambda hwnd, **_: SimpleNamespace(walk=lambda: [])  # yoklama dogrudan okur
+    try:
+        out: dict[str, object] = {}
+
+        def waiting() -> None:
+            try:
+                out["r"] = server.pc_wait_for(query="olmayan-oge", hwnd=1, timeout=1.5)
+            except Exception as exc:  # noqa: BLE001
+                out["r"] = exc
+
+        caller = threading.Thread(target=waiting)
+        caller.start()
+        time.sleep(0.6)
+        started = time.monotonic()
+        quick = worker.call(lambda: 42)
+        check("bekleme surerken baska cagri hemen calisti",
+              quick == 42 and time.monotonic() - started < 0.3, f"{time.monotonic() - started:.2f} sn")
+        caller.join()
+        text = str(out.get("r"))
+        check("ic sinirdan uzun bekleme ZAMAN ASIMI ile bitti (TimeoutError degil)",
+              isinstance(out.get("r"), str) and text.startswith("ZAMAN ASIMI"), text[:120])
+        polls = int(text.split("(")[1].split()[0]) if "yoklama" in text else 0
+        check("birden cok yoklama yapildi", polls >= 3, str(polls))
+
+        check("kaybolma: bos agacta hemen 'kayboldu'",
+              "kayboldu (1 yoklama" in server.pc_wait_for(query="x", hwnd=1, until="disappear"))
+
+        config.WAIT_FOR_MAX_S = 0.6
+        text = server.pc_wait_for(query="x", hwnd=1, timeout=5)
+        check("ust sinir asilinca soyleniyor", "ust sinir 0.6 sn" in text and "istenen 5 sn" in text, text)
+        config.WAIT_FOR_MAX_S = saved[1]
+
+        result = server.pc_batch(actions=[{"name": "pc_wait_for",
+                                           "input": {"query": "x", "hwnd": 1, "timeout": 1.2}}])
+        body = " ".join(part for part in result if isinstance(part, str))
+        check("pc_batch icindeki uzun bekleme de dusmedi", "ZAMAN ASIMI" in body and "HATA" not in body,
+              body[:160])
+
+        # Kilit tutan toplu is: bekleme kalan kilit suresine kirpilir (uyari ve
+        # oturumlar arasi mutex 10 dk asili kalmasin).
+        started = time.monotonic()
+        result = server._run_steps([{"name": "pc_wait_for", "input": {"query": "x", "hwnd": 1,
+                                                                      "timeout": 30}}],
+                                   [], -1, time.monotonic() + 1.0)
+        body = " ".join(part for part in result if isinstance(part, str))
+        check("kilitli toplu iste bekleme kirpildi ve soylendi",
+              "kirpildi" in body and time.monotonic() - started < 2.5,
+              f"{time.monotonic() - started:.1f} sn {body[-120:]}")
+        clipped, why = server._clip_wait({"timeout": 3}, time.monotonic() + 20)
+        check("kalan sureye sigan bekleme kirpilmadi", clipped == {"timeout": 3} and not why)
+        # pc_do wait de kirpilir: her biri en cok 30 sn, birkac adimda kilit sinirini asardi.
+        worker.CALL_TIMEOUT_S = saved[0]     # 0.6 sn'lik gercek bekleme "takili" sayilmasin
+        started = time.monotonic()
+        result = server._run_steps([{"name": "pc_do", "input": {"action": "wait", "duration": 5}}],
+                                   [], -1, time.monotonic() + 0.6)
+        body = " ".join(part for part in result if isinstance(part, str))
+        check("kilitli toplu iste pc_do wait de kirpildi",
+              "kirpildi" in body and time.monotonic() - started < 2.0,
+              f"{time.monotonic() - started:.1f} sn {body[-120:]}")
+        clipped, why = server._clip_wait({"action": "wait"}, time.monotonic() + 20, "duration", 1.0)
+        check("sure verilmeyen pc_do wait varsayilanla (1 sn) olculur", clipped == {"action": "wait"} and not why)
+    finally:
+        worker.CALL_TIMEOUT_S, config.WAIT_FOR_MAX_S, server._resolve_hwnd, uia.snapshot_window = saved
+
+
+def test_com_retry() -> None:
+    print("E_FAIL'da tek tekrar")
+    import comtypes
+
+    from pcgoz import server, uia
+
+    saved = (uia.snapshot_window, dict(server._last))
+    tries: list[int] = []
+
+    def flaky(fails: int, hresult: int = uia.E_FAIL) -> object:
+        def snap(hwnd: int, **_: object) -> str:
+            tries.append(hwnd)
+            if len(tries) <= fails:
+                raise comtypes.COMError(hresult, "Belirtilmemis hata", None)
+            return "agac"
+        return snap
+
+    try:
+        uia.snapshot_window = flaky(1)
+        check("bir E_FAIL sonrasi ikinci deneme basarili",
+              server._snapshot(7) == "agac" and len(tries) == 2, str(tries))
+        tries.clear()
+        uia.snapshot_window = flaky(2)
+        try:
+            server._snapshot(7)
+            check("iki E_FAIL: hata gecti", False, str(tries))
+        except comtypes.COMError:
+            check("iki E_FAIL: hata gecti (yalniz bir tekrar)", len(tries) == 2, str(tries))
+        tries.clear()
+        uia.snapshot_window = flaky(1, hresult=uia.UIA_E_TIMEOUT)
+        try:
+            server._snapshot(7)
+            check("baska COMError tekrarlanmadi", False, str(tries))
+        except comtypes.COMError:
+            check("baska COMError tekrarlanmadi", len(tries) == 1, str(tries))
+    finally:
+        uia.snapshot_window = saved[0]
+        server._last.clear()
+        server._last.update(saved[1])
 
 
 def test_ocr_search() -> None:
@@ -636,6 +754,165 @@ def test_secure_desktop() -> None:
         windows.input_desktop_name = real
 
 
+def test_stale_content() -> None:
+    print("bayat icerik: ortulu Chromium, ekran, kilit")
+    import ctypes as ct
+    import json
+    from types import SimpleNamespace
+
+    from pcgoz import config, occlusion as o, server, windows
+
+    screen = (0, 0, 1920, 1080)
+    check("tek pencere tamamen ortuyor", o._occluded((100, 100, 500, 400), [(50, 50, 600, 450)], screen))
+    check("iki pencere birlikte ortuyor",
+          o._occluded((100, 100, 500, 400), [(0, 0, 300, 1080), (300, 0, 1920, 1080)], screen))
+    check("1 px serit acik: ortulu degil",
+          not o._occluded((100, 100, 500, 400), [(0, 0, 499, 1080), (500, 0, 1920, 1080)], screen))
+    check("ekran disina tasan kisim gorunur sayilmaz",
+          o._occluded((-300, 100, 200, 400), [(0, 0, 1920, 1080)], screen))
+    check("ustunde ortucu yok: gorunur", not o._occluded((100, 100, 500, 400), [], screen))
+    check("buyutulmus pencere calisma alanina sigar (AdjustToFit)",
+          o._fit((-8, -8, 1928, 1040), (0, 0, 1920, 1032)) == (0, 0, 1920, 1032)
+          and o._fit((10, 10, 50, 50), (0, 0, 100, 100)) == (10, 10, 50, 50))
+
+    saved_display = dict(o._display)
+    try:
+        setting = o.POWERBROADCAST_SETTING(o.GUID_CONSOLE_DISPLAY_STATE, 4, (ct.c_ubyte * 4)(0, 0, 0, 0))
+        o._on_power(None, o.PBT_POWERSETTINGCHANGE, ct.addressof(setting))
+        off = o._display["state"]
+        setting.Data[0] = 2
+        o._on_power(None, o.PBT_POWERSETTINGCHANGE, ct.addressof(setting))
+        dim = o._display["state"]
+        other = o.POWERBROADCAST_SETTING(o._GUID(), 4, (ct.c_ubyte * 4)(0, 0, 0, 0))
+        o._on_power(None, o.PBT_POWERSETTINGCHANGE, ct.addressof(other))
+        check("ekran bildirimi okunur (0 kapali, 2 karartilmis), baska GUID yok sayilir",
+              off == 0 and dim == 2 and o._display["state"] == 2, f"{off} {dim} {o._display['state']}")
+    finally:
+        o._display.clear()
+        o._display.update(saved_display)
+    real = o.display_state()
+    check("ekran durumu kaydi: Windows o anki degeri hemen gonderiyor", real in (0, 1, 2), f"durum={real}")
+    if (windows.input_desktop_name() or "").lower() == "default":
+        check("WTS oturum bayraklari dogru okunuyor (masaustu acik -> kilitli degil)", not o.session_locked())
+    o.wake()                    # gosterilmeyen kukla pencere: hatasiz acilip kapanmali
+    check("wake hatasiz", True)
+
+    saved = (o.is_chromium, o.session_locked, o.display_state, o.chromium_hidden, o.stale_reason,
+             o.wake, windows.input_desktop_name, windows.is_window, windows.focus)
+    env: dict[str, Any] = {}
+    o.is_chromium = lambda h: env["chromium"]
+    o.session_locked = lambda: env["locked"]
+    o.display_state = lambda: env["display"]
+    o.chromium_hidden = lambda h: env["hidden"]
+    windows.input_desktop_name = lambda: env["desk"]
+    windows.is_window = lambda h: True
+
+    def reason(*, image: bool = False, **kw: Any) -> str | None:
+        env.update(chromium=True, locked=False, display=1, hidden=None, desk="Default")
+        env.update(kw)
+        found = o.stale_reason(42, image=image)
+        return found[0] if found else None
+
+    try:
+        check("ortulu / simge durumunda Chromium -> uyari",
+              reason(hidden="ortulu") == "ortulu" and reason(hidden="simge") == "simge")
+        check("gorunur Chromium -> uyari yok", reason() is None)
+        check("ekran kapali: Chromium metni bayat, digerinin metni degil",
+              reason(display=0) == "ekran_kapali" and reason(display=0, chromium=False) is None
+              and reason(display=0, chromium=False, image=True) == "ekran_kapali")
+        check("kilitli oturum -> Chromium bayat", reason(locked=True) == "kilitli")
+        check("guvenli masaustu: goruntude uyari, UAC'de Chromium metni bayat sayilmaz",
+              reason(desk="Winlogon", image=True, chromium=False) == "guvenli_masaustu"
+              and reason(desk="Winlogon") is None)
+        env.update(hidden="simge")
+        found = o.stale_reason(42, image=False)
+        check("uyari nedeni ve ne yapacagini soyler", found is not None and "simge durumunda" in found[1]
+              and "once pc_focus" in found[1], str(found))
+        check("bayat Chromium'da invoke 'tikla' onerisi bastirilir", server._content_stale(42))
+
+        calls: list[tuple[Any, bool]] = []
+        o.stale_reason = lambda hwnd, image: calls.append((hwnd, image)) or ("ortulu", "[!] ORTULU")
+        noted = lambda text: lambda: (server._note_target(42), text)[1]  # noqa: E731
+        out = server._audited("pc_text", noted("metin"), {})
+        rec = json.loads(config.LOG_PATH.read_text(encoding="utf-8").splitlines()[-1])
+        check("_audited uyariyi ekler, gunluge bayat yazar",
+              out == "metin\n[!] ORTULU" and rec.get("bayat") == "ortulu" and calls == [(42, False)],
+              f"{out!r} {rec.get('bayat')} {calls}")
+        out = server._audited("pc_screenshot", lambda: ["not", b"png"], {})
+        check("goruntu araci image=True, not ilk parcaya", out == ["not\n[!] ORTULU", b"png"]
+              and calls[-1] == (None, True), str(calls[-1]))
+        out = server._audited("pc_invoke", noted("basildi"), {})
+        check("eylemde 'tekrarlamadan once' notu", "tekrarlamadan once pc_focus" in out, out)
+        check("pc_focus'a uyari eklenmez", server._audited("pc_focus", lambda: "on planda", {}) == "on planda")
+        saved_raw = server._RAW["pc_text"]
+        server._RAW["pc_text"] = lambda **kw: (server._note_target(42), "metin")[1]
+        try:
+            out = server._run_steps([{"name": "pc_text", "input": {}}], ["pc_text"], -1)
+        finally:
+            server._RAW["pc_text"] = saved_raw
+        check("pc_batch adiminda da uyari",
+              any("metin\n[!] ORTULU" in part for part in out if isinstance(part, str)), str(out))
+
+        def boom() -> str:
+            server._note_target(42)
+            raise TimeoutError("metin gorunmedi")
+        try:
+            server._audited("pc_wait_for", boom, {})
+            err = None
+        except TimeoutError as exc:
+            err = str(exc)
+        check("hata metnine de eklenir", err == "metin gorunmedi\n[!] ORTULU", str(err))
+        o.stale_reason = lambda hwnd, image: (_ for _ in ()).throw(OSError("kontrol bozuk"))
+        check("kontrol hatasi araci bozmaz", server._audited("pc_text", lambda: "metin", {}) == "metin")
+
+        # Eylem: once taze, eylem hedefi kendisi kucultunce "simge" -- uyari pc_focus'la geri aldirirdi.
+        seq: list[int] = []
+        o.stale_reason = lambda hwnd, image: (seq.append(hwnd), None if len(seq) == 1
+                                              else ("simge", "[!] SIMGE"))[1]
+        out = server._audited("pc_do", lambda: server._watch(42, lambda: "kucultuldu", False)[0], {})
+        rec = json.loads(config.LOG_PATH.read_text(encoding="utf-8").splitlines()[-1])
+        check("eylem hedefi kendisi gizlerse uyari yok (once tazeyse sonrasina bakilmaz), ara anahtar gunluge girmez",
+              out == "kucultuldu" and seq == [42] and "_bayat_once" not in rec and "bayat" not in rec,
+              f"{out!r} {seq} {rec}")
+        o.stale_reason = lambda hwnd, image: ("ortulu", "[!] ORTULU")
+        out = server._audited("pc_do", lambda: server._watch(42, lambda: "tiklandi", False)[0], {})
+        check("eylemden once de bayatsa uyari", out.startswith("tiklandi\n[!] ORTULU")
+              and "tekrarlamadan once pc_focus" in out, out)
+        o.stale_reason = lambda hwnd, image: ("ust_hep_ustte", "[!] UST")
+        out = server._audited("pc_invoke", lambda: server._watch(42, lambda: "basildi", False)[0], {})
+        check("hep ustte ortude pc_focus onerilmez", out.endswith("tekrarlama.") and "pc_focus ile" not in out, out)
+        env.update(hidden="ust_hep_ustte")
+        o.stale_reason = saved[4]
+        found = o.stale_reason(42, image=False)
+        check("hep ustte ortu mesaji ne yapilacagini soyler",
+              found is not None and found[0] == "ust_hep_ustte" and "pc_focus bunu acmaz" in found[1], str(found))
+
+        saved_reg, saved_collect = server.registry, server.patterns.collect_text
+        server.registry = SimpleNamespace(  # type: ignore[assignment]
+            resolve=lambda ref, **k: SimpleNamespace(label="govde"), owning_hwnd=lambda ref: 42)
+        server.patterns.collect_text = lambda node, limit=0: "eski metin"  # type: ignore[assignment]
+        calls.clear()
+        o.stale_reason = lambda hwnd, image: calls.append((hwnd, image)) or ("ortulu", "[!] ORTULU")
+        try:
+            out = server._audited("pc_text", lambda: server.pc_text(ref_id="ref_40"), {})
+        finally:
+            server.registry, server.patterns.collect_text = saved_reg, saved_collect
+        check("pc_text ref_id ile de hedefi kaydeder", calls == [(42, False)] and out.endswith("[!] ORTULU"),
+              f"{calls} {out!r}")
+
+        woke: list[int] = []
+        windows.focus = lambda h: None
+        o.wake = lambda: woke.append(1)
+        o.is_chromium = lambda h: True
+        server._focus_and_wake(77)
+        o.is_chromium = lambda h: False
+        server._focus_and_wake(78)
+        check("one alinan Chromium durtulur, digeri durtulmez", woke == [1], str(woke))
+    finally:
+        (o.is_chromium, o.session_locked, o.display_state, o.chromium_hidden, o.stale_reason,
+         o.wake, windows.input_desktop_name, windows.is_window, windows.focus) = saved
+
+
 def main() -> int:
     test_parse_combo()
     test_busy_and_held_logic()
@@ -650,11 +927,14 @@ def main() -> int:
     test_audit_stats()
     test_ocr_search()
     test_worker_timeout()
+    test_wait_for_outside_worker()
+    test_com_retry()
     test_screenshot_space()
     test_key_guard()
     test_screenshot_scale()
     test_stable_refs()
     test_effect_summary()
+    test_stale_content()        # gunluge yazar: test_audit_stats'tan sonra
     print("=" * 58)
     print(f"{len(passed)} gecti, {len(failed)} kaldi")
     for name in failed:

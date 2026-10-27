@@ -335,10 +335,10 @@ için kabuk kullanıldı:
 | Görev | PcGöz çağrısı | Sonuç |
 |---|---|---|
 | Ayarlar > Ekran: ölçeği oku | 2 | %125 (Önerilen) |
-| Not Defteri: yaz, Farklı Kaydet ile scratchpad'e kaydet | 4 (2'si toplu iş) | dosya birebir aynı: Türkçe karakterler, uzun tire, `79/79` |
+| Not Defteri: yaz, Farklı Kaydet ile geçici klasöre kaydet | 4 (2'si toplu iş) | dosya birebir aynı: Türkçe karakterler, uzun tire, `79/79` |
 | Görev Yöneticisi: belleğe göre sırala, en çoğunu bul | 3 | sıralama `pc_invoke` ile, fare oynamadan |
 | Dosya Gezgini: README.md boyutu | 2 | 35 KB (kabukla doğrulandı: 34.943 bayt) |
-| SadePDF (Qt + WebEngine): arayüzü oku | 1 | okundu |
+| Bir PDF görüntüleyici (Qt + WebEngine): arayüzü oku | 1 | okundu |
 
 Hiç hata çıkmadı. Odak geri düşüşü gerçekte ilk kez burada devreye girdi: Not Defteri öne
 alınamadı, `pc_focus` başlık çubuğuna tıklayıp aldı. Turda bulunan beş pürüz aynı gün
@@ -349,7 +349,7 @@ düzeltildi:
 2. **Görünmez yön işaretleri.** Dosya Gezgini tarihleri `‎24.‎09.…` diye veriyor. Ad,
    değer, AutomationId ve yardım metninden atılıyor.
 3. **Qt nesne yolları ad gibi görünüyordu.** Qt, adı olmayan öğeye `QApplication.MainWindow.
-   QWebEngineView.QObject.viewer…` veriyor; SadePDF çıktısının yarısı buydu. Artık boş
+   QWebEngineView.QObject.viewer…` veriyor; o PDF görüntüleyicinin çıktısının yarısı buydu. Artık boş
    sayılıyor. Aynı bütçede gösterilen öğe 45'ten 61'e çıktı.
 4. **`pc_find` öğenin değerinde aramıyordu.** Adı olan bir kutunun içeriği (Gezgin'de
    "Değiştirme tarihi" = `24.09.2026 14:42`) bulunamıyordu. `pc_wait_for`'da da aynı eksik
@@ -632,3 +632,173 @@ hiç açılmaması ve hata metninin modele ulaşmaması. Yedek modu da import'u 
    pencerelerini kullanıcınınkilerden pid ile kesin ayırmak demek. Başlığa bakarak ayırmaya
    çalışmak kırılgan: `"MİLYON".upper()` ASCII `"MILYON"` ile eşleşmediği için bir eleme
    filtresi sessizce çalışmadı ve yanlış pencere kapatıldı.
+
+---
+
+## 0.6.2: düzeltmeler ve ölçümleri
+
+Her ölçümün sonunda `[tarih · yöntem]`. Yöntem `tests/` altındaki betik ya da: *canlı* (gerçek
+pencerede elle deneme), *kaynak* (Chromium kaynak kodu), *ayrı betik* (depoya girmeyen tek
+seferlik ölçüm; yöntemi metinde), *inceleme* (kod incelemesinin doğrulanmış bulgusu), *kullanım
+günlüğü* (gerçek kullanımın denetim günlüğü).
+
+### Örtülü Chromium penceresi: bayat içerik
+
+- **Bulgu: siyah yok, bayat var.** Tamamen örtülü Chromium penceresi sayfayı çizmiyor,
+  erişilebilirlik ağacını da güncellemiyor. `PrintWindow` örtüldüğü andaki kareyi veriyor (9 sn
+  eskiye kadar; siyah değil, `capture` bunu pencerenin "kendi" çizimi sayıyordu); UIA metni de
+  donuk (sayaç 8 iken başlık 11). Pencere başlığı (`GetWindowText`) gizliyken de güncel, çizimin
+  ~200 ms gerisinde. UIA okuması pencereyi uyandırmıyor. Sonuç: model örtüldüğü andaki sayfayı
+  okuyup buna göre tıklıyordu `[2026-10-27 · tests/_sayac.py + tests/ortulu_chromium.py]`.
+- **Yöntem** (`tests/_sayac.py`): `tests/fixtures/sayac.html` her saniye arka plan rengini
+  değiştirir, renk sayacı birebir kodlar (R = n%16, G = n/16, B = 200). Başlık JS durumunu
+  çizimden bağımsız gösterir (`PcGozD f=<n> v=<visible|hidden>`; `v` Chromium'un kendi
+  görünürlük kararı). Çizilen sayaç başlıktakinin gerisindeyse kare bayattır.
+- **Tazelenme süreleri** `[2026-10-27 · ayrı betik, aynı sayaç yöntemi]`:
+
+  | Olay | Tazelenme |
+  |---|---|
+  | Ön plan değişimiyle öne alma | ~35 ms (0,2 sn bekleme yetiyor) |
+  | Örtü gizlenince: ekran | ~50 ms |
+  | Örtü gizlenince: `PrintWindow` | ~27 ms |
+  | Simge durumundan geri dönüş | ~50 ms; 0 ms'de kare siyah/koyu |
+
+  Pencerenin kendisi simgeden 31 ms'de geri geliyor, animasyon gecikmesi yok `[2026-10-26 · canlı]`;
+  Chromium'un yeniden çizmesi bunun üstüne. Taze profilli Brave'de ilk UIA erişimi 4,7 sn
+  (erişilebilirlik o an açılıyor), sonra `pc_text` ~0,8 sn.
+- **Chromium'un kararı** `[2026-10-27 · kaynak: ui/aura/native_window_occlusion_tracker_win.cc, ui/gfx/win/hwnd_util.cc]`:
+  - Sanal ekrandan, z-sırasında hedefin üstündeki "örtücü" pencerelerin dikdörtgenleri çıkarılır;
+    hedefin dikdörtgeni kalanla kesişmiyorsa örtülü.
+  - Örtücü sayılmayanlar (`IsWindowVisibleAndFullyOpaque`): görünmeyen, simge durumundaki,
+    tıklama geçiren (`WS_EX_TRANSPARENT`), araç penceresi (görev çubuğu hariç), yarı saydam ya da
+    renk anahtarlı katmanlı (`GetLayeredWindowAttributes` başarısızsa — `UpdateLayeredWindow` ile
+    çizilen — saydam sayılır), karmaşık bölgeli, gizlenmiş (cloaked), boş ve ipucu (tooltip)
+    pencereleri. Büyütülmüş pencerenin taşan kenarlığı çalışma alanına kırpılır
+    (`gfx::Rect::AdjustToFit`).
+  - Yeniden hesaplatan olaylar: FOREGROUND, MINIMIZE*, MOVESIZE*, STATECHANGE, CAPTUREEND ve
+    izlenen süreçte LOCATIONCHANGE. SHOW/HIDE yok sayılır (yalnız küçük resim için dinlenir).
+  - Ekran kapalıyken ya da oturum kilitliyken bütün pencereler örtülü sayılır.
+- **PcGöz'ün hesabı** (`occlusion.py`): aynı hesabın kopyası; uyarı yalnız Chromium gerçekten
+  çizmezken çıkar, yarı örtülü pencerede çıkmaz. Canlıda 7 düzenin 7'si Chromium'un kendi
+  kararıyla uyuştu: tam örtü, 30 px şerit, iki pencere, araç penceresi, yarı saydam, büyütülmüş,
+  hep üstte `[2026-10-27 · tests/ortulu_chromium.py; bu sürümün koduyla da 7/7]`. Yalnız
+  `Chrome_WidgetWin_*` sınıfına bakılır. Nedenler: `simge`, `gizli` (görünmez ya da başka sanal
+  masaüstünde), `ortulu`, `ust_hep_ustte` (hep üstte duran pencereler tek başına örtüyor: öne almak
+  açmaz, `pc_focus` önerilmez); ayrıca `ekran_kapali`, `kilitli`, `guvenli_masaustu`. Hedef
+  z-sırasında bulunamazsa ya da GDI bölgesi kurulamazsa uyarı çıkmaz.
+- **Uyarı yolu** (`server._audited`): okuma araçları ve `pc_invoke`/`pc_do` sonuca tek satır `[!]`
+  ekler, günlüğe `bayat=<neden>` yazar; `pc_batch` adımları da aynı yoldan geçer. Metin araçlarında
+  yalnız Chromium pencereleri bayatlar; görüntü araçlarında ekran kapalı ve güvenli masaüstü her
+  pencerede. Eylem araçlarında bayatlık eylemden **önce** de ölçülür: önce tazeyse sonraki bayatlık
+  eylemin kendi sonucudur (küçültme, gizleme) ve uyarılmaz — uyarı `pc_focus` ile eylemi geri
+  aldırmasın. Bayat pencerede `pc_invoke` "pc_do left_click ile dene" demez (eylemi ikiletirdi).
+  `[2026-10-27 · inceleme + tests/birim.py]`
+- **Zaten öndeki örtülü pencere uyanmıyordu.** Hedef zaten ön plandaysa öne almak olay üretmiyor
+  (ön plan değişmedi): Chromium kendini örtülü sanıp 2,5 sn ve daha uzun çizmeden kalıyordu.
+  Uyandırma yolları `[2026-10-27 · ayrı betik, sayaç yöntemi]`:
+
+  | Yol | Uyandı mı | Süre | Hedefe ileti |
+  |---|---|---|---|
+  | Hedefte `SetWindowPos(SWP_FRAMECHANGED)` | evet | 29 ms | gider |
+  | Hedefi 1 px kaydırıp geri almak | evet | 49 ms | gider |
+  | Kendi gizli `STATIC` penceremizde `EnableWindow` | evet | 56 ms | gitmez |
+  | Kendi kukla penceremizden `NotifyWinEvent(EVENT_OBJECT_STATECHANGE)` | evet | 55 ms | gitmez ← **seçilen** |
+  | `NotifyWinEvent(EVENT_SYSTEM_FOREGROUND)`, hedefin hwnd'siyle | hayır | — | — |
+  | Kukla pencerede SHOW/HIDE | hayır: Chromium SHOW/HIDE'ı yalnız küçük resim için dinler | — | — |
+  | `SetForegroundWindow(GetShellWindow())` ile ön planı kabuğa verip geri almak | reddedildi | — | — |
+
+  `occlusion.wake()` ekran dışında 1×1 `STATIC` kukla pencere oluşturur, STATECHANGE olayını
+  gönderir, yok eder. `pc_focus` Chromium hedefinde bunu çağırır; canlıda zaten öndeki örtülü Brave
+  hemen tazelendi `[2026-10-27 · tests/ortulu_chromium.py]`.
+
+### Ekran kapalı, oturum kilitli
+
+- **Oturum kilidi** WTS ile ayrı okunur (`WTSQuerySessionInformationW(WTSSessionInfoEx)`): girdi
+  masaüstü adı UAC'yi kilitten ayırmıyor, Chromium ise yalnız kilitte durur. Tuzak:
+  `WTSINFOEXW.Data` 8. baytta başlar (birlikteki `LogonTime` yapıyı 8 bayta hizalar)
+  `[2026-10-27 · ayrı betik]`.
+- **Ekran durumu:** `PowerSettingRegisterNotification(GUID_CONSOLE_DISPLAY_STATE,
+  DEVICE_NOTIFY_CALLBACK)`. Pencere gerekmiyor; kayıtta o anki değer hemen geliyor (birim testte
+  1). Değerler: 0 kapalı, 1 açık, 2 karartılmış `[2026-10-27 · tests/birim.py]`.
+- **Gözlem:** bilgisayar başında kimse yokken ekran zaman aşımıyla kapanınca Brave hiç çizmiyor
+  (sekmeler ve erişilebilirlik ağacı boş) ve ekran görüntüsü bayat kare veriyor — görev çubuğu
+  saati gerçek saatten geri, yani Chromium dışında da görüntü bayat. Fareyi oynatmak ekranı açıyor;
+  uyarı bunu önerir (`pc_do action="hover"`) `[2026-10-25 · gözlem]`.
+- **Doğrulanmadı:** kapanış/açılış bildiriminin gerçek geçişte gelmesi ve ekran kapalıyken Chromium
+  dışı pencerelerin karesi (`tests/ekran_kapali.py`; ekranı kapatır, henüz koşulmadı).
+- Tuzak: x64'te `INPUT` 40 bayt. `ekran_kapali.py`'nin kendi yapısı 48 bayttı ve `SendInput`
+  sessizce başarısızdı; artık `pcgoz.input.move` kullanılıyor `[2026-10-27 · inceleme]`.
+
+### Örtülü pencerenin ekrandan kırpılması
+
+`capture_window`'un üçüncü değeri bool yerine "kendi" / "bos" / "yanitsiz". `PrintWindow` boş
+dönünce ekrandan kırpmaya sessizce düşülüyordu: pencere arkadaysa resimde üstteki pencere
+görünüyor, model hedefe baktığını sanıyordu. Şimdi `capture.covered_by` orta + dört iç noktaya
+bakar; `pc_screenshot`/`pc_ocr` etiketi üstteki pencereyi adıyla söyler, örtülüyse kutu çizilmez
+`[2026-10-26 · iki tkinter penceresiyle: kendi / bos+örtülü / bos+üstü açık]`. Dikkat: "kendi"
+her zaman taze demek değil — örtülü Chromium'un kendi çizimi bayattır (yukarı).
+
+### `pc_wait_for` ve toplu işte bekleme
+
+- Bütün yoklama döngüsü tek `worker.call`'du: 90 sn'yi geçen bekleme ipliği "takılı" gösterip
+  arkadaki çağrıları da düşürüyordu — kullanım günlüğünde 10 TimeoutError'ın 9'u bu zincirden,
+  üstelik yanlış "yeniden başlat" talimatıyla. Şimdi döngü çağıranın ipliğinde, her yoklama kısa bir
+  `worker.call`; aradaki uykuda başka araçlar çalışır. Üst sınır 600 sn (eski 120 sn'lik sınır
+  işçinin 90 sn'sini aşıyordu) `[2026-10-26 · kullanım günlüğü + tests/birim.py]`.
+- Yoklama ağacı doğrudan okur: `_last`'i (`pc_screenshot` kutuları ondan çizilir) ve ref kuşağını
+  ezmez; geçici E_FAIL turu sonuç sayılmaz, yoklama sürer `[2026-10-27 · inceleme]`.
+- Kilit tutan toplu işte (60 sn sonra girdi bırakılır ama uyarı, kanca ve oturumlar arası kilit
+  toplu iş bitene dek kalır) `pc_wait_for` ve `pc_do wait` kalan kilit süresine kırpılır, cevap
+  bunu söyler. Kırpılmasa 600 sn'lik bekleme öteki oturumları `OtherSession`'a düşürür, kullanıcı
+  10 dk "kilit" uyarısı görürdü `[2026-10-26/27 · inceleme + tests/birim.py]`.
+
+### E_FAIL'da tek tekrar
+
+COMError E_FAIL (Türkçe Windows'ta "Belirtilmemiş hata") kullanım günlüğündeki 17 COMError'ın
+hepsiydi (find 6, screenshot 4, read 3, wait_for 3, text 1). Ağaç okuması 150 ms sonra bir kez
+daha denenir; diğer hatalar (`UIA_E_TIMEOUT` vb.) aynen geçer. Geçici olup olmadığı bilinmiyor
+`[2026-10-26 · kullanım günlüğü + tests/birim.py]`.
+
+### Öne alma
+
+- **Küçült + geri getir.** Canlı denemede hedef tamamen örtülüydü: `SetForegroundWindow` odak
+  kilidine takıldı, başlıkta güvenli tıklama noktası yoktu. Simge durumundan geri gelen pencere odak
+  kilidine takılmıyor: iki denemede de öne aldı. Son yedek bu; girdi göndermez
+  `[2026-10-26 · canlı: iki WinForms penceresi]`.
+- **Küçültme yarışı.** `show` beklemiyor (`ShowWindowAsync`); küçülmeyi geç işleyen pencere
+  sonradan küçülüp küçük kalıyordu. Yanıt vermeyen pencere hiç küçültülmez; `focus` küçülme
+  gerçekten görülünce çağrılır (en çok 1 sn); çıkışta simge durumundaysa geri getirilir. Tepsiye
+  saklanan uygulama küçülünce pencereyi gizler: önce görünürdüyse gizli kalmaz `[2026-10-27 · inceleme]`.
+- **Kalıcı iletişim kutusu.** Hedefin modal kutusu açıkken ön plan o kutudur, kök sahibi hedeftir:
+  başarı sayılır, sonuca not eklenir (klavye girdisi kutuya gider). Eskiden başarısızlık sayılıp
+  başlığa tıklanıyor, pencere küçültülüp geri getiriliyordu `[2026-10-27 · inceleme]`.
+- Kullanıcı etkinken odak kilidi öne almayı reddeder ve `pc_focus` başlığa **gerçek** tıklar;
+  deneme betiği yazarken hesaba katılmalı (`ortulu_chromium.py` bu durumda gerçek tıklamaya
+  düşecek adımı atlar) `[2026-10-27 · tests/ortulu_chromium.py]`.
+
+### Diğer
+
+- Toggle sonrası yeni durum okunamazsa hata değil not döner: öğe yeniden oluşunca okuma hata
+  verebiliyor, eylem yapıldığı hâlde hata dönünce model tekrar deneyip geri çeviriyordu
+  `[2026-10-27 · inceleme]`.
+- Denetim günlüğü yazılan metni tutmaz: uzunluk ve `text_sha` (SHA-256'nın ilk 12 hanesi) —
+  aynı metnin tekrarlandığı metnin kendisi saklanmadan görülür `[2026-10-27 · inceleme]`.
+- Beceri: `paste=False` otomatik yapıştırmayı kapatmaz (`use_paste = paste or len(text) > 200`);
+  her tuşa tepki gereken kutuda metin 200 karakterlik `type` adımlarına bölünür.
+
+### Deneme yazarken tuzaklar
+
+- tkinter örtüsü ~5 sn pompalanmazsa (ileti döngüsü dönmezse) Windows onu "yanıt vermiyor"a
+  düşürür ve ölçümü bozar; ölçüm sırasında `update()` sürdürülmeli.
+- tk `state("normal")` `withdraw`'dan sonra pencereyi yeniden gösterir.
+- tkinter etiketleri UIA'da görünmüyor: UIA'lı canlı denemeler WinForms penceresiyle yapılır.
+  `[2026-10-26/27 · ayrı betik]`
+
+### Yeni testler
+
+- `tests/ortulu_chromium.py` — yukarıdaki yedi düzen, uyarılar ve `pc_focus` dürtmesi; ekranda
+  ~45 sn pencere açılıp kapanır, tuş/tıklama gönderilmez.
+- `tests/ekran_kapali.py` — **ekranı kapatır**; yalnız bilgisayarı kimse kullanmıyorken.
+- `tests/birim.py` — bayat içerik (örtülme geometrisi, ekran bildirimi, uyarı yolu, eylem öncesi
+  bayatlık, `pc_batch` adımı, `pc_text ref_id`, dürtme) ve toplu işte `pc_do wait` kırpması:
+  192/192.

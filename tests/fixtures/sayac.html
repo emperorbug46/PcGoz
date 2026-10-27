@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>PcGozD f=0 v=visible</title>
+<style>html,body{margin:0;height:100%}#n{position:fixed;left:8px;top:4px;font:bold 28px sans-serif}</style>
+<body><div id="n">0</div>
+<script>
+// Her saniye renk degisir; renk sayaci birebir kodlar (R: n%16, G: n/16, B=200),
+// baslik JS durumunu cizimden bagimsiz gosterir.
+let n = 0;
+function draw() {
+  document.body.style.background = `rgb(${n % 16 * 16 + 8},${(n >> 4) % 16 * 16 + 8},200)`;
+  document.getElementById('n').textContent = n;
+  document.title = 'PcGozD f=' + n + ' v=' + document.visibilityState;
+}
+draw();
+setInterval(() => { n++; draw(); }, 1000);
+document.addEventListener('visibilitychange', draw);
+</script>

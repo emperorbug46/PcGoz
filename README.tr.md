@@ -2,11 +2,26 @@
 
 [![CI](https://github.com/emperorbug46/PcGoz/actions/workflows/python-app.yml/badge.svg)](https://github.com/emperorbug46/PcGoz/actions/workflows/python-app.yml)
 
-Claude Code'un Windows masaüstünü görmesini ve kullanmasını sağlayan bir MCP sunucusu.
+**Claude Code'un Windows masaüstünü görmesini ve kullanmasını sağlayan bir MCP sunucusu.**
+
+![Claude hesap makinesinde 1234 × 5678'i hesaplıyor: numaralı kutulu ekran görüntüsü alıyor, düğmelere ref ile tıklıyor](docs/pcgoz-demo.gif)
+
+▶ [4 dakikalık seslendirmeli demoyu izle](https://github.com/emperorbug46/PcGoz/releases/download/v0.6.2/PcGoz-demo.mp4) (İngilizce, altyazılı): dokuz sahne; özellikler ve token tasarrufundan WhatsApp, tarayıcı ve PDF uygulamasındaki gerçek görevlere.
 
 Pencerenin UI Automation ağacını okur, öğelerin üzerine numaralı kutular çizilmiş ekran görüntüsü alır, gerçek fare ve klavyeyle tıklar ve yazar. Numaralar birbirini tutar: ağaçtaki `ref_7` ekran görüntüsündeki 7 numaralı kutudur. Böylece Claude resme bakıp piksel tahmin etmeden doğrudan o öğeye işlem yapabilir. Her işlemden sonra ekranda neyin değiştiğini bildirir.
 
 [English](README.md) · Resmi değildir, Anthropic ile bağlantısı yoktur.
+
+## Neden PcGöz
+
+- **Piksel tahmini değil, numaralı ref.** Her öğe bir `ref_N` alır, ekran görüntüsünde aynı numaralar kutu içinde görünür. Claude öğeyi numarasıyla gösterir, tıklama yanlış düğmeye kaymaz.
+- **Önce metin, çok daha az token.** Claude ekran görüntüsü yerine arayüz ağacını, düz metni ya da yalnız istediği öğeyi alır. Bir giriş formunda ölçüldü: tam ekran görüntüsü yaklaşık 1.600 token, aynı bilgi metin olarak yaklaşık 40 token.
+- **Her işlemden sonra değişiklik raporu.** Her tıklama ya da tuş ekranda neyin değiştiğiyle döner. Claude'un kontrol için yeniden ekran görüntüsü alması nadiren gerekir: daha az resim, daha az token.
+- **Fare olmadan da çalışır.** `pc_invoke` UI Automation üzerinden basar, işaretler, seçer, açar: imleç yerinden oynamaz, pencerenin üstü örtülüyken de çalışır (bazı uygulamalar düğmesine basılınca kendini öne getirir).
+- **Gerçek bilgisayarın için yapıldı.** İşlem sürerken kendi girdin bekletilir, `Ctrl+Alt+Shift+Esc` her şeyi dondurur, parola alanları ve UAC istemleri reddedilir, yeri değişmiş ya da kapanmış öğeye tıklama da reddedilir.
+- **Erişilebilirlik ağacı olmayan uygulamalar.** Tuval uygulamaları, Qt ve oyunlar Windows'un yerleşik OCR'ıyla, yerelde okunur.
+- **Ekranın bayat olduğunu bilir.** Üstü örtülü ya da simge durumundaki tarayıcı veya Electron uygulaması çizimi durdurur. PcGöz bunu fark eder ve Claude'a eski içeriği vermek yerine söyler.
+- **Gizlilik baştan.** Ağ bağlantısı yok, ekran görüntüsü diske yazılmaz, yazılan metin günlüğe girmez.
 
 ## Neler isteyebilirsin
 

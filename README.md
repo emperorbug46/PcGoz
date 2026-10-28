@@ -2,11 +2,26 @@
 
 [![CI](https://github.com/emperorbug46/PcGoz/actions/workflows/python-app.yml/badge.svg)](https://github.com/emperorbug46/PcGoz/actions/workflows/python-app.yml)
 
-An MCP server that lets Claude Code see and use the Windows desktop.
+**An MCP server that lets Claude Code see and use your Windows desktop.**
+
+![Claude works out 1234 × 5678 in Calculator: it takes a screenshot with numbered boxes, then clicks the buttons by ref](docs/pcgoz-demo.gif)
+
+▶ [Watch the 4-minute demo with narration](https://github.com/emperorbug46/PcGoz/releases/download/v0.6.2/PcGoz-demo.mp4): nine scenes, from feature demos and token savings to real tasks in WhatsApp, the browser and a PDF app.
 
 It reads the UI Automation tree of a window, takes screenshots with numbered boxes drawn over the elements, and clicks and types with real mouse and keyboard input. The numbers match: `ref_7` in the tree is box 7 in the screenshot, so Claude can look at the picture and act on the element without guessing pixel coordinates. After each action it reports what changed on screen.
 
 [Türkçe](README.tr.md) · Unofficial, not affiliated with Anthropic.
+
+## Why PcGöz
+
+- **Numbered refs, not pixel guessing.** Every element gets a `ref_N`, and the screenshot shows the same numbers in boxes. Claude points at an element by its number, so a click can't drift onto the wrong button.
+- **Text first, far fewer tokens.** Claude gets the UI tree, the plain text or just the element it asked for instead of a screenshot. Measured on a sign-in form: about 40 tokens of text against about 1,600 for a full-screen image.
+- **A change report after every action.** Each click or keystroke comes back with what changed on screen, so Claude rarely needs another screenshot to check. Fewer images, fewer tokens.
+- **Works without the mouse.** `pc_invoke` presses, toggles, selects and expands through UI Automation: the cursor stays where it is, and it works while the window is covered (some apps bring themselves to the front when a button is invoked).
+- **Built for your real machine.** Your own input is held back while an action runs, `Ctrl+Alt+Shift+Esc` freezes everything, password fields and UAC prompts are refused, and a click on an element that moved or closed is refused too.
+- **Apps without an accessibility tree.** Canvas apps, Qt and games are read with the OCR built into Windows, locally.
+- **Knows when the screen is stale.** A covered or minimized browser or Electron app stops repainting. PcGöz notices and says so instead of handing Claude old content.
+- **Private by design.** No network connections, screenshots are never written to disk, typed text is never logged.
 
 ## What you can ask for
 
